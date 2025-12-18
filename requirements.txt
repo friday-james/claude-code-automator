@@ -1,0 +1,2 @@
+# Optional: for cron scheduling
+croniter>=1.0.0
