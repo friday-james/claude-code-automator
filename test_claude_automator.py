@@ -662,6 +662,128 @@ class TestAutoReviewer(unittest.TestCase):
         self.assertIn("formatting", feedback)
 
 
+class TestSchedulingFunctions(unittest.TestCase):
+    """Tests for scheduling functions (run_loop, run_with_interval)."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.tmpdir = tempfile.mkdtemp()
+        self.reviewer = AutoReviewer(
+            project_dir=self.tmpdir,
+            base_branch="main",
+            modes=["fix_bugs"]
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch.object(AutoReviewer, 'run_once')
+    @patch('builtins.print')
+    def test_run_loop_calls_run_once(self, mock_print, mock_run_once):
+        """Should call run_once repeatedly in a loop."""
+        # Import run_loop
+        from claude_automator import run_loop
+
+        # Set up mock to raise after 3 calls to break the infinite loop
+        call_count = 0
+        def side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 3:
+                raise KeyboardInterrupt()
+            return True
+
+        mock_run_once.side_effect = side_effect
+
+        # run_loop will loop until KeyboardInterrupt
+        try:
+            run_loop(self.reviewer)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have called run_once 3 times
+        self.assertEqual(mock_run_once.call_count, 3)
+
+    @patch('time.sleep')
+    @patch('time.time')
+    @patch.object(AutoReviewer, 'run_once')
+    @patch('builtins.print')
+    def test_run_with_interval_respects_interval(self, mock_print, mock_run_once, mock_time, mock_sleep):
+        """Should wait for remaining interval time after each run."""
+        from claude_automator import run_with_interval
+
+        # Simulate run_once taking 2 seconds when interval is 10
+        call_count = 0
+        def time_side_effect():
+            nonlocal call_count
+            call_count += 1
+            # First call is start time (0), second is after run (2s elapsed)
+            if call_count % 2 == 1:
+                return 0
+            else:
+                return 2
+
+        mock_time.side_effect = time_side_effect
+
+        run_count = 0
+        def run_once_side_effect():
+            nonlocal run_count
+            run_count += 1
+            if run_count >= 2:
+                raise KeyboardInterrupt()
+            return True
+
+        mock_run_once.side_effect = run_once_side_effect
+
+        try:
+            run_with_interval(self.reviewer, 10)
+        except KeyboardInterrupt:
+            pass
+
+        # Should have called sleep with 8 seconds (10 - 2 = 8)
+        mock_sleep.assert_called_with(8)
+
+    @patch('time.sleep')
+    @patch('time.time')
+    @patch.object(AutoReviewer, 'run_once')
+    @patch('builtins.print')
+    def test_run_with_interval_no_sleep_if_run_exceeds_interval(self, mock_print, mock_run_once, mock_time, mock_sleep):
+        """Should not sleep if run_once takes longer than interval."""
+        from claude_automator import run_with_interval
+
+        # Simulate run_once taking 15 seconds when interval is 10
+        call_count = 0
+        def time_side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count % 2 == 1:
+                return 0
+            else:
+                return 15
+
+        mock_time.side_effect = time_side_effect
+
+        run_count = 0
+        def run_once_side_effect():
+            nonlocal run_count
+            run_count += 1
+            if run_count >= 2:
+                raise KeyboardInterrupt()
+            return True
+
+        mock_run_once.side_effect = run_once_side_effect
+
+        try:
+            run_with_interval(self.reviewer, 10)
+        except KeyboardInterrupt:
+            pass
+
+        # Should not have called sleep since max(0, 10-15) = 0
+        mock_sleep.assert_not_called()
+
+
 class TestRunOnceWorkflow(unittest.TestCase):
     """Tests for the run_once() orchestration workflow."""
 
