@@ -672,6 +672,12 @@ def validate_positive_int(value: int, name: str, max_value: int | None = None) -
 # ============================================================================
 
 def get_mode_list() -> str:
+    """Generate a formatted string listing all available improvement modes.
+
+    Returns:
+        A multi-line string with mode names and descriptions, suitable for
+        display in CLI help text or interactive mode selection.
+    """
     lines = ["\nAvailable improvement modes:\n"]
     for key, mode in IMPROVEMENT_MODES.items():
         lines.append(f"  {key:20} - {mode['description']}")
@@ -682,6 +688,16 @@ def get_mode_list() -> str:
 
 
 def create_default_northstar(project_dir: Path) -> tuple[bool, str]:
+    """Create a default NORTHSTAR.md file in the specified project directory.
+
+    Args:
+        project_dir: The directory where NORTHSTAR.md should be created.
+
+    Returns:
+        A tuple of (success, message) where success is True if the file was
+        created, False if it already exists or creation failed. The message
+        describes the outcome.
+    """
     northstar_path = project_dir / "NORTHSTAR.md"
     if northstar_path.exists():
         return False, f"NORTHSTAR.md already exists at {northstar_path}"
@@ -693,6 +709,16 @@ def create_default_northstar(project_dir: Path) -> tuple[bool, str]:
 
 
 def load_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
+    """Load NORTHSTAR.md and generate a prompt for Claude to work towards its goals.
+
+    Args:
+        project_dir: The directory containing the NORTHSTAR.md file.
+
+    Returns:
+        A tuple of (prompt, error) where prompt is the generated prompt string
+        if successful, or None if loading failed. Error is None on success,
+        or contains an error message describing what went wrong.
+    """
     northstar_path = project_dir / "NORTHSTAR.md"
     if not northstar_path.exists():
         return None, f"NORTHSTAR.md not found in {project_dir}"
@@ -706,6 +732,15 @@ def load_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
 
 
 def select_modes_interactive() -> list[str]:
+    """Display an interactive menu for selecting improvement modes.
+
+    Presents a numbered list of available modes and prompts the user to
+    select one or more by entering space-separated numbers or mode names.
+
+    Returns:
+        A list of selected mode keys. Returns an empty list if the user
+        cancels or makes no selection.
+    """
     print("\n" + "=" * 60)
     print("Select improvement modes to run")
     print("=" * 60 + "\n")
