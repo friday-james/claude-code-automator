@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import json
 import os
 import random
 import re
 import string
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -847,9 +849,6 @@ class AutoReviewer:
 
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
         """Run Claude CLI with the given prompt, streaming output in real-time with usage stats."""
-        import tempfile
-        import json
-
         try:
             # Write prompt to a temp file to avoid command line length limits
             with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
