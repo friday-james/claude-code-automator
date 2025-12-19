@@ -18,6 +18,9 @@ from claude_automator import (
     validate_cron_expression,
     validate_positive_int,
     get_combined_prompt,
+    get_northstar_prompt,
+    get_pr_review_prompt,
+    get_fix_feedback_prompt,
     load_northstar_prompt,
     create_default_northstar,
     IMPROVEMENT_MODES,
@@ -245,6 +248,50 @@ class TestGetCombinedPrompt(unittest.TestCase):
             self.assertIn("name", mode, f"Mode {key} missing 'name'")
             self.assertIn("description", mode, f"Mode {key} missing 'description'")
             self.assertIn("prompt", mode, f"Mode {key} missing 'prompt'")
+
+
+class TestPromptGenerators(unittest.TestCase):
+    """Tests for prompt generator functions."""
+
+    def test_get_northstar_prompt_includes_content(self):
+        """Should include the provided content in the prompt."""
+        content = "# My Vision\n\n## Goals\n- Goal 1"
+        result = get_northstar_prompt(content)
+        self.assertIn("My Vision", result)
+        self.assertIn("Goal 1", result)
+
+    def test_get_northstar_prompt_includes_instructions(self):
+        """Should include instructions for making progress."""
+        result = get_northstar_prompt("test content")
+        self.assertIn("Analyze the current state", result)
+        self.assertIn("Make concrete progress", result)
+        self.assertIn("Commit your changes", result)
+
+    def test_get_pr_review_prompt_includes_pr_number(self):
+        """Should include the PR number in the prompt."""
+        result = get_pr_review_prompt("123")
+        self.assertIn("PR #123", result)
+        self.assertIn("gh pr view 123", result)
+        self.assertIn("gh pr diff 123", result)
+
+    def test_get_pr_review_prompt_includes_decision_instructions(self):
+        """Should include APPROVED/CHANGES_REQUESTED instructions."""
+        result = get_pr_review_prompt("456")
+        self.assertIn("APPROVED", result)
+        self.assertIn("CHANGES_REQUESTED", result)
+
+    def test_get_fix_feedback_prompt_includes_pr_and_feedback(self):
+        """Should include PR number and feedback in the prompt."""
+        result = get_fix_feedback_prompt("789", "Fix the typo in line 42")
+        self.assertIn("PR #789", result)
+        self.assertIn("Fix the typo in line 42", result)
+        self.assertIn("gh pr checkout 789", result)
+
+    def test_get_fix_feedback_prompt_includes_commit_instructions(self):
+        """Should include instructions to commit and push."""
+        result = get_fix_feedback_prompt("100", "Some feedback")
+        self.assertIn("Commit", result)
+        self.assertIn("git push", result)
 
 
 class TestNorthstarFunctions(unittest.TestCase):

@@ -392,6 +392,15 @@ A high-quality, well-maintained codebase that is secure, performant, and easy to
 # ============================================================================
 
 def get_northstar_prompt(northstar_content: str) -> str:
+    """Generate a prompt for Claude to work towards North Star goals.
+
+    Args:
+        northstar_content: The contents of the NORTHSTAR.md file defining project vision and goals.
+
+    Returns:
+        A formatted prompt instructing Claude to analyze the codebase and make
+        incremental progress towards the defined goals.
+    """
     return f"""You are working towards the project's North Star vision. Read the goals below and make progress towards them.
 
 ## NORTHSTAR.md - Project Vision & Goals
@@ -441,6 +450,15 @@ If the North Star goals are already fully achieved, say "North Star achieved! Al
 
 
 def get_pr_review_prompt(pr_number: str) -> str:
+    """Generate a prompt for Claude to review a pull request.
+
+    Args:
+        pr_number: The PR number to review (e.g., "123").
+
+    Returns:
+        A formatted prompt instructing Claude to fetch PR details, review changes,
+        and provide either APPROVED or CHANGES_REQUESTED decision.
+    """
     return f"""You are a code reviewer. Please review PR #{pr_number}.
 
 1. First, get the PR details:
@@ -465,6 +483,16 @@ When requesting changes, be SPECIFIC about what needs to be fixed."""
 
 
 def get_fix_feedback_prompt(pr_number: str, feedback: str) -> str:
+    """Generate a prompt for Claude to fix issues identified in PR review.
+
+    Args:
+        pr_number: The PR number that needs fixes (e.g., "123").
+        feedback: The reviewer's feedback describing what needs to be fixed.
+
+    Returns:
+        A formatted prompt instructing Claude to checkout the PR branch,
+        address each issue, commit fixes, and push changes.
+    """
     return f"""A code reviewer has requested changes on PR #{pr_number}. Please address their feedback.
 
 **Reviewer Feedback:**
@@ -489,6 +517,16 @@ IMPORTANT: Actually make the fixes, don't just describe them."""
 
 
 def get_combined_prompt(mode_keys: list[str]) -> str:
+    """Generate a combined prompt for multiple improvement modes.
+
+    Args:
+        mode_keys: List of mode keys from IMPROVEMENT_MODES (e.g., ['fix_bugs', 'security']).
+
+    Returns:
+        For a single mode, returns that mode's prompt directly.
+        For multiple modes, returns a combined prompt with all mode instructions
+        separated by dividers and guidance for systematic execution.
+    """
     if len(mode_keys) == 1:
         return IMPROVEMENT_MODES[mode_keys[0]]["prompt"]
 
