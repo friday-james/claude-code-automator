@@ -811,6 +811,7 @@ class AutoReviewer:
         self.modes = modes or ["fix_bugs"]
         self.review_prompt = review_prompt or get_combined_prompt(self.modes)
         self.session_cost = 0.0  # Cumulative cost across all runs
+        self.session_id: str | None = None  # For continuing sessions
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -858,19 +859,24 @@ class AutoReviewer:
                 prompt_file = f.name
 
             try:
-                # Read prompt from file to pass directly to claude
-                with open(prompt_file, 'r') as pf:
-                    prompt_content = pf.read()
+                # Build command - use -c to continue session if available
+                cmd = ["claude", "--print", "--output-format", "stream-json", "--verbose"]
+                if self.session_id:
+                    cmd.extend(["--resume", self.session_id])
 
-                # Run claude with stream-json + verbose for real-time output and usage
-                # Using shell=False with list args is safer than shell=True with string
+                # Run claude with prompt via stdin (avoids command line length limits)
                 process = subprocess.Popen(
-                    ["claude", "--print", "--output-format", "stream-json", "--verbose", prompt_content],
+                    cmd,
                     cwd=self.project_dir,
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                 )
+
+                # Send prompt via stdin
+                process.stdin.write(prompt)
+                process.stdin.close()
 
                 result_data = {}
                 start_time = time.time()
@@ -913,6 +919,10 @@ class AutoReviewer:
 
                 # Print usage summary from result
                 if result_data:
+                    # Save session_id for continuing future runs
+                    if "session_id" in result_data:
+                        self.session_id = result_data["session_id"]
+
                     run_cost = result_data.get("total_cost_usd", 0)
                     self.session_cost += run_cost
                     usage = result_data.get("usage", {})
