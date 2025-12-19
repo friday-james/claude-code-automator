@@ -73,33 +73,94 @@ The **North Star** mode lets you define your own project vision and goals. Claud
 
 ```bash
 # Create a template
-claude-automator --init-northstar
+./claude_automator.py --init-northstar
 
 # Edit NORTHSTAR.md to customize your goals, then run:
-claude-automator --once --northstar
+./claude_automator.py --once --northstar
 ```
 
-### Example NORTHSTAR.md
+### Default NORTHSTAR.md Template
+
+Running `--init-northstar` creates this template. Customize it for your project:
 
 ```markdown
 # Project North Star
 
+> This file defines the vision and goals for this project. The auto-improvement daemon
+> will iterate towards these goals, making incremental progress with each run.
+
 ## Vision
-Build a fast, secure, and user-friendly API.
+
+A high-quality, well-maintained codebase that is secure, performant, and easy to work with.
+
+---
 
 ## Goals
 
-### Must Have
-- [ ] All endpoints have input validation
-- [ ] Authentication on protected routes
-- [ ] Unit tests for business logic
+### Code Quality
+- [ ] Clean, readable code with consistent style
+- [ ] No code duplication (DRY principle)
+- [ ] Functions and classes have single responsibilities
+- [ ] Meaningful variable and function names
 
-### Should Have
-- [ ] Response time < 100ms for all endpoints
-- [ ] API documentation with examples
+### Bug-Free
+- [ ] No runtime errors or crashes
+- [ ] All edge cases handled properly
+- [ ] No logic errors in business logic
 
-### Nice to Have
-- [ ] Rate limiting on public endpoints
+### Security
+- [ ] No SQL injection vulnerabilities
+- [ ] No XSS vulnerabilities
+- [ ] No command injection risks
+- [ ] No hardcoded secrets or credentials
+- [ ] Proper input validation on all user inputs
+
+### Performance
+- [ ] No obvious performance bottlenecks
+- [ ] Efficient algorithms (no unnecessary O(n²) where O(n) works)
+- [ ] Appropriate caching where beneficial
+
+### Testing
+- [ ] Unit tests for critical business logic
+- [ ] Integration tests for key workflows
+- [ ] Edge cases covered in tests
+
+### Documentation
+- [ ] Public APIs and functions are documented
+- [ ] Complex logic has explanatory comments
+- [ ] README is up to date
+
+### User Experience
+- [ ] Clear, helpful error messages
+- [ ] Good feedback for user actions
+- [ ] Intuitive interfaces
+
+### Code Health
+- [ ] No dead or unused code
+- [ ] No unused imports or variables
+- [ ] No commented-out code blocks
+
+---
+
+## Priority Order
+
+1. **Security** - Fix any security vulnerabilities first
+2. **Bugs** - Fix any bugs that affect functionality
+3. **Tests** - Add tests to prevent regressions
+4. **Code Quality** - Improve maintainability
+5. **Performance** - Optimize where it matters
+6. **Documentation** - Help future developers
+7. **UX** - Improve the user experience
+8. **Cleanup** - Remove cruft and modernize
+
+---
+
+## Notes
+
+- Focus on incremental improvements
+- Don't over-engineer; keep it simple
+- Prioritize impact over perfection
+- Mark items as [x] when complete
 ```
 
 ---
