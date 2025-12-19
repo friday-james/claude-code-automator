@@ -672,6 +672,12 @@ def validate_positive_int(value: int, name: str, max_value: int | None = None) -
 # ============================================================================
 
 def get_mode_list() -> str:
+    """Generate a formatted list of available improvement modes for display.
+
+    Returns:
+        A multi-line string listing all modes with their descriptions,
+        suitable for printing to the console or including in help text.
+    """
     lines = ["\nAvailable improvement modes:\n"]
     for key, mode in IMPROVEMENT_MODES.items():
         lines.append(f"  {key:20} - {mode['description']}")
@@ -682,6 +688,15 @@ def get_mode_list() -> str:
 
 
 def create_default_northstar(project_dir: Path) -> tuple[bool, str]:
+    """Create a default NORTHSTAR.md file in the project directory.
+
+    Args:
+        project_dir: The directory where NORTHSTAR.md should be created.
+
+    Returns:
+        A tuple of (success, message) where success is True if the file
+        was created, False if it already exists or creation failed.
+    """
     northstar_path = project_dir / "NORTHSTAR.md"
     if northstar_path.exists():
         return False, f"NORTHSTAR.md already exists at {northstar_path}"
@@ -693,6 +708,15 @@ def create_default_northstar(project_dir: Path) -> tuple[bool, str]:
 
 
 def load_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
+    """Load NORTHSTAR.md and generate the corresponding prompt.
+
+    Args:
+        project_dir: The directory containing NORTHSTAR.md.
+
+    Returns:
+        A tuple of (prompt, error) where prompt is the generated prompt
+        if successful, or None with an error message if loading failed.
+    """
     northstar_path = project_dir / "NORTHSTAR.md"
     if not northstar_path.exists():
         return None, f"NORTHSTAR.md not found in {project_dir}"
@@ -706,6 +730,15 @@ def load_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
 
 
 def select_modes_interactive() -> list[str]:
+    """Interactively prompt the user to select improvement modes.
+
+    Displays a numbered list of available modes and allows the user to select
+    one or more by entering space-separated numbers, '0' for all modes, or 'q' to quit.
+
+    Returns:
+        List of selected mode keys (e.g., ['fix_bugs', 'security']).
+        Returns an empty list if the user quits or cancels.
+    """
     print("\n" + "=" * 60)
     print("Select improvement modes to run")
     print("=" * 60 + "\n")
@@ -1021,6 +1054,18 @@ class AutoReviewer:
             return False
 
     def create_pull_request(self, summary: str) -> str | None:
+        """Create a pull request for the current branch.
+
+        Pushes the current branch to origin and creates a PR via GitHub CLI.
+        The PR title includes the mode names and date, and the body includes
+        a summary of the changes.
+
+        Args:
+            summary: A summary of the changes made, used in the PR body.
+
+        Returns:
+            The PR URL if successful, None if no commits or creation failed.
+        """
         if not self.has_commits_ahead():
             return None
         success, _ = self.run_cmd(["git", "push", "-u", "origin", self.current_branch], timeout=120)
@@ -1042,6 +1087,16 @@ class AutoReviewer:
         return None
 
     def review_pr_with_claude(self, pr_url: str) -> tuple[bool, str, str]:
+        """Have Claude review a pull request.
+
+        Args:
+            pr_url: The full URL of the PR to review.
+
+        Returns:
+            A tuple of (approved, full_output, feedback) where approved is True
+            if the PR was approved, full_output is Claude's complete response,
+            and feedback is extracted reviewer comments for fixes if needed.
+        """
         pr_number = pr_url.rstrip('/').split('/')[-1]
         success, output = self.run_claude(get_pr_review_prompt(pr_number), timeout=600)
         output_lower = output.lower()
@@ -1051,20 +1106,58 @@ class AutoReviewer:
         return approved, output, feedback
 
     def fix_pr_feedback(self, pr_url: str, feedback: str, iteration: int) -> tuple[bool, str]:
+        """Have Claude fix issues identified in PR review.
+
+        Args:
+            pr_url: The full URL of the PR to fix.
+            feedback: The reviewer's feedback describing what needs to be fixed.
+            iteration: The current fix iteration number (for logging).
+
+        Returns:
+            A tuple of (success, output) from the Claude execution.
+        """
         pr_number = pr_url.rstrip('/').split('/')[-1]
         return self.run_claude(get_fix_feedback_prompt(pr_number, feedback), timeout=1200)
 
     def merge_pr(self, pr_url: str) -> bool:
+        """Merge a pull request using squash merge.
+
+        Args:
+            pr_url: The full URL of the PR to merge.
+
+        Returns:
+            True if the merge succeeded, False otherwise.
+        """
         pr_number = pr_url.rstrip('/').split('/')[-1]
         success, _ = self.run_cmd(["gh", "pr", "merge", pr_number, "--squash", "--delete-branch"], timeout=60)
         return success
 
     def cleanup_branch(self):
+        """Switch back to the base branch and clear the current branch state.
+
+        Called after a review cycle completes (whether successful or not)
+        to return the repository to a clean state.
+        """
         if self.current_branch:
             self.run_cmd(["git", "checkout", self.base_branch])
             self.current_branch = None
 
     def run_once(self) -> bool:
+        """Execute a single improvement cycle.
+
+        This is the main orchestration method that:
+        1. Acquires a lock to prevent concurrent runs
+        2. Creates a new branch
+        3. Runs Claude to make improvements
+        4. Creates a PR if changes were made
+        5. Has Claude review the PR
+        6. If changes requested, has Claude fix them (up to max_iterations)
+        7. Optionally auto-merges on approval
+
+        Returns:
+            True if the cycle completed (regardless of outcome),
+            False if the lock couldn't be acquired or branch creation failed.
+        """
         if not self.lock_file.acquire():
             self.log("Another review is already running, skipping")
             return False
@@ -1133,6 +1226,15 @@ class AutoReviewer:
 # ============================================================================
 
 def run_loop(reviewer: AutoReviewer):
+    """Run the improvement cycle continuously in an infinite loop.
+
+    Executes run_once() repeatedly without any delay between runs.
+    Useful for rapid iteration when you want Claude to continuously
+    improve the codebase without waiting.
+
+    Args:
+        reviewer: The AutoReviewer instance to run.
+    """
     print("Running continuously. Press Ctrl+C to stop.")
     run_count = 0
     while True:
@@ -1145,6 +1247,16 @@ def run_loop(reviewer: AutoReviewer):
 
 
 def run_with_interval(reviewer: AutoReviewer, interval: int):
+    """Run the improvement cycle at fixed time intervals.
+
+    Executes run_once() and then waits for the remaining interval time
+    before starting the next run. If a run takes longer than the interval,
+    the next run starts immediately without waiting.
+
+    Args:
+        reviewer: The AutoReviewer instance to run.
+        interval: Minimum seconds between the start of each run.
+    """
     print(f"Running every {interval}s. Press Ctrl+C to stop.")
     while True:
         start = time.time()
@@ -1156,6 +1268,18 @@ def run_with_interval(reviewer: AutoReviewer, interval: int):
 
 
 def run_with_cron(reviewer: AutoReviewer, cron_expr: str):
+    """Run the improvement cycle on a cron schedule.
+
+    Executes run_once() at times specified by the cron expression.
+    Requires the croniter package to be installed.
+
+    Args:
+        reviewer: The AutoReviewer instance to run.
+        cron_expr: A cron expression (e.g., "0 */2 * * *" for every 2 hours).
+
+    Raises:
+        SystemExit: If croniter is not installed.
+    """
     if not HAS_CRONITER:
         print("Error: pip install croniter")
         sys.exit(1)
