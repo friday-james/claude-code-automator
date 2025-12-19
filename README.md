@@ -1,4 +1,4 @@
-# Claude Automator
+# Let Claude Code 🔥🥵
 
 ### Your codebase improves itself while you sleep.
 
