@@ -576,6 +576,65 @@ class TestAutoReviewer(unittest.TestCase):
         self.assertIn("main", call_args)
         self.assertIsNone(self.reviewer.current_branch)
 
+    @patch.object(AutoReviewer, 'run_cmd')
+    def test_create_branch_success(self, mock_run_cmd):
+        """Should create branch and set current_branch."""
+        mock_run_cmd.return_value = (True, "")
+
+        result = self.reviewer.create_branch("test-branch")
+
+        self.assertTrue(result)
+        self.assertEqual(self.reviewer.current_branch, "test-branch")
+        # Should call: checkout base, pull --rebase, checkout -b new_branch
+        self.assertEqual(mock_run_cmd.call_count, 3)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    def test_create_branch_failure(self, mock_run_cmd):
+        """Should return False when branch creation fails."""
+        # First two calls succeed, third fails
+        mock_run_cmd.side_effect = [(True, ""), (True, ""), (False, "error")]
+
+        result = self.reviewer.create_branch("test-branch")
+
+        self.assertFalse(result)
+        self.assertIsNone(self.reviewer.current_branch)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    def test_create_pull_request_success(self, mock_has_commits, mock_run_cmd):
+        """Should create PR and return URL on success."""
+        mock_has_commits.return_value = True
+        mock_run_cmd.side_effect = [
+            (True, ""),  # git push
+            (True, "https://github.com/owner/repo/pull/123\n"),  # gh pr create
+        ]
+        self.reviewer.current_branch = "test-branch"
+
+        result = self.reviewer.create_pull_request("Test summary")
+
+        self.assertEqual(result, "https://github.com/owner/repo/pull/123")
+
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    def test_create_pull_request_no_commits(self, mock_has_commits):
+        """Should return None when no commits ahead."""
+        mock_has_commits.return_value = False
+
+        result = self.reviewer.create_pull_request("Test summary")
+
+        self.assertIsNone(result)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    def test_create_pull_request_push_fails(self, mock_has_commits, mock_run_cmd):
+        """Should return None when git push fails."""
+        mock_has_commits.return_value = True
+        mock_run_cmd.return_value = (False, "push failed")
+        self.reviewer.current_branch = "test-branch"
+
+        result = self.reviewer.create_pull_request("Test summary")
+
+        self.assertIsNone(result)
+
     @patch.object(AutoReviewer, 'run_claude')
     def test_review_pr_approved(self, mock_run_claude):
         """Should detect PR approval correctly."""
