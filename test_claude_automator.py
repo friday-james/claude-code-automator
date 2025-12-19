@@ -920,6 +920,92 @@ class TestAutoReviewerRunOnce(unittest.TestCase):
         self.assertTrue(result)
         mock_cleanup.assert_called()
 
+    @patch.object(LockFile, 'release')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'review_pr_with_claude')
+    @patch.object(AutoReviewer, 'merge_pr')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    def test_run_once_auto_merge_on_approval(
+        self, mock_cleanup, mock_merge, mock_review, mock_create_pr,
+        mock_has_commits, mock_run_claude, mock_create_branch,
+        mock_acquire, mock_release
+    ):
+        """Should auto-merge PR when enabled and approved."""
+        # Create reviewer with auto_merge enabled
+        self.reviewer.auto_merge = True
+        mock_acquire.return_value = True
+        mock_create_branch.return_value = True
+        mock_run_claude.return_value = (True, "Fixed bugs")
+        mock_has_commits.return_value = True
+        mock_create_pr.return_value = "https://github.com/owner/repo/pull/123"
+        mock_review.return_value = (True, "APPROVED", "")
+        mock_merge.return_value = True
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)
+        mock_merge.assert_called_once_with("https://github.com/owner/repo/pull/123")
+
+    @patch.object(LockFile, 'release')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'review_pr_with_claude')
+    @patch.object(AutoReviewer, 'fix_pr_feedback')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    def test_run_once_fix_feedback_loop(
+        self, mock_cleanup, mock_fix, mock_review, mock_create_pr,
+        mock_has_commits, mock_run_claude, mock_create_branch,
+        mock_acquire, mock_release
+    ):
+        """Should iterate fix feedback loop until approved."""
+        mock_acquire.return_value = True
+        mock_create_branch.return_value = True
+        mock_run_claude.return_value = (True, "Fixed bugs")
+        mock_has_commits.return_value = True
+        mock_create_pr.return_value = "https://github.com/owner/repo/pull/123"
+        # First review requests changes, second approves
+        mock_review.side_effect = [
+            (False, "CHANGES_REQUESTED: fix typo", "fix typo"),
+            (True, "APPROVED", ""),
+        ]
+        mock_fix.return_value = (True, "Fixed typo")
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)
+        mock_fix.assert_called_once()
+        self.assertEqual(mock_review.call_count, 2)
+
+    @patch.object(LockFile, 'release')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    def test_run_once_fails_when_pr_creation_fails(
+        self, mock_cleanup, mock_create_pr, mock_has_commits,
+        mock_run_claude, mock_create_branch, mock_acquire, mock_release
+    ):
+        """Should fail when PR creation fails."""
+        mock_acquire.return_value = True
+        mock_create_branch.return_value = True
+        mock_run_claude.return_value = (True, "Fixed bugs")
+        mock_has_commits.return_value = True
+        mock_create_pr.return_value = None  # PR creation failed
+
+        result = self.reviewer.run_once()
+
+        self.assertFalse(result)
+        mock_cleanup.assert_called()
+
 
 if __name__ == "__main__":
     unittest.main()
