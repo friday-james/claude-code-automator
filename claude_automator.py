@@ -1,43 +1,28 @@
 #!/usr/bin/env python3
 """
-Auto Review Daemon - Periodically spawns Claude Code to improve code and create PRs.
+Claude Automator - Automatically improve your codebase with Claude Code.
 
-Features:
-- Multiple improvement modes: bug fixes, code quality, UX, tests, security, etc.
-- Prevents overlapping runs with lock file
-- Creates PRs for improvements
-- Spawns separate Claude instance to review PRs before merge
-- Sends Telegram notifications on completion
-- Review-fix loop: if reviewer requests changes, fixer addresses them
+Zero dependencies beyond Python 3.10+ stdlib. Just download and run.
 
 Usage:
-    python auto_review.py --once --mode improve_code  # Improve code quality
-    python auto_review.py --once --mode add_tests     # Add more tests
-    python auto_review.py --once --mode all           # Run all improvements
-    python auto_review.py --list-modes                # Show available modes
-    python auto_review.py --interval 3600             # Run every hour (interactive)
-
-Environment variables:
-    TG_BOT_TOKEN: Telegram bot token (from @BotFather)
-    TG_CHAT_ID: Your Telegram chat ID (from @userinfobot)
+    ./claude_automator.py --once -m improve_code    # Improve code quality
+    ./claude_automator.py --once --northstar        # Iterate towards NORTHSTAR.md goals
+    ./claude_automator.py --list-modes              # Show available modes
 """
 
 import subprocess
 import argparse
 import time
-import json
 import re
 import os
 import sys
 import fcntl
-import signal
 import random
 import string
 import urllib.request
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from contextlib import contextmanager
 
 try:
     from croniter import croniter
@@ -45,9 +30,8 @@ try:
 except ImportError:
     HAS_CRONITER = False
 
-
 # ============================================================================
-# Improvement Modes - Predefined improvement options
+# IMPROVEMENT MODES - Predefined prompts for each mode
 # ============================================================================
 
 IMPROVEMENT_MODES = {
@@ -112,7 +96,6 @@ Focus on:
 - Improving CLI help text and documentation
 - Making interfaces more intuitive
 - Adding input validation with clear feedback
-- Improving accessibility (if applicable)
 - Adding better logging for debugging
 - Improving output formatting and readability
 
@@ -308,19 +291,11 @@ Limit: Focus on the most impactful accessibility issues. Check at most 5 files."
     },
 }
 
+# ============================================================================
+# NORTHSTAR TEMPLATE - Default template for NORTHSTAR.md
+# ============================================================================
 
-def get_mode_list() -> str:
-    """Return a formatted list of available improvement modes."""
-    lines = ["\nAvailable improvement modes:\n"]
-    for key, mode in IMPROVEMENT_MODES.items():
-        lines.append(f"  {key:20} - {mode['description']}")
-    lines.append(f"\n  {'all':20} - Run all improvement modes sequentially")
-    lines.append(f"  {'interactive':20} - Interactively select modes to run")
-    lines.append(f"\n  {'northstar':20} - Iterate towards goals defined in NORTHSTAR.md")
-    return "\n".join(lines)
-
-
-DEFAULT_NORTHSTAR_TEMPLATE = """# Project North Star
+NORTHSTAR_TEMPLATE = """# Project North Star
 
 > This file defines the vision and goals for this project. The auto-improvement daemon
 > will iterate towards these goals, making incremental progress with each run.
@@ -409,40 +384,12 @@ A high-quality, well-maintained codebase that is secure, performant, and easy to
 - Mark items as [x] when complete
 """
 
+# ============================================================================
+# PROMPT GENERATORS
+# ============================================================================
 
-def create_default_northstar(project_dir: Path) -> tuple[bool, str]:
-    """Create a default NORTHSTAR.md file. Returns (success, message)."""
-    northstar_path = project_dir / "NORTHSTAR.md"
-
-    if northstar_path.exists():
-        return False, f"NORTHSTAR.md already exists at {northstar_path}"
-
-    try:
-        northstar_path.write_text(DEFAULT_NORTHSTAR_TEMPLATE)
-        return True, f"Created NORTHSTAR.md at {northstar_path}"
-    except Exception as e:
-        return False, f"Failed to create NORTHSTAR.md: {e}"
-
-
-def get_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
-    """
-    Read NORTHSTAR.md and generate a prompt for iterating towards those goals.
-    Returns (prompt, error_message).
-    """
-    northstar_path = project_dir / "NORTHSTAR.md"
-
-    if not northstar_path.exists():
-        return None, f"NORTHSTAR.md not found in {project_dir}"
-
-    try:
-        northstar_content = northstar_path.read_text()
-    except Exception as e:
-        return None, f"Failed to read NORTHSTAR.md: {e}"
-
-    if not northstar_content.strip():
-        return None, "NORTHSTAR.md is empty"
-
-    prompt = f"""You are working towards the project's North Star vision. Read the goals below and make progress towards them.
+def get_northstar_prompt(northstar_content: str) -> str:
+    return f"""You are working towards the project's North Star vision. Read the goals below and make progress towards them.
 
 ## NORTHSTAR.md - Project Vision & Goals
 
@@ -488,331 +435,10 @@ def get_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
 
 If the North Star goals are already fully achieved, say "North Star achieved! All goals complete." and suggest new goals if appropriate.
 """
-    return prompt, None
 
 
-def select_modes_interactive() -> list[str]:
-    """Interactively prompt user to select improvement modes."""
-    print("\n" + "=" * 60)
-    print("Select improvement modes to run")
-    print("=" * 60 + "\n")
-
-    modes = list(IMPROVEMENT_MODES.keys())
-    for i, key in enumerate(modes, 1):
-        mode = IMPROVEMENT_MODES[key]
-        print(f"  [{i:2}] {mode['name']:25} - {mode['description']}")
-
-    print(f"\n  [ 0] All modes")
-    print(f"  [ q] Quit")
-
-    print("\nEnter mode numbers separated by space (e.g., '1 3 5'), or '0' for all:")
-
-    try:
-        choice = input("> ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.")
-        return []
-
-    if choice == 'q' or choice == '':
-        return []
-
-    if choice == '0':
-        return modes
-
-    selected = []
-    for num in choice.split():
-        try:
-            idx = int(num) - 1
-            if 0 <= idx < len(modes):
-                selected.append(modes[idx])
-        except ValueError:
-            # Try matching by name
-            if num in modes:
-                selected.append(num)
-
-    return selected
-
-
-def get_combined_prompt(mode_keys: list[str]) -> str:
-    """Combine prompts from multiple modes into one."""
-    if len(mode_keys) == 1:
-        return IMPROVEMENT_MODES[mode_keys[0]]["prompt"]
-
-    prompts = []
-    for key in mode_keys:
-        if key in IMPROVEMENT_MODES:
-            mode = IMPROVEMENT_MODES[key]
-            prompts.append(f"## {mode['name']}\n\n{mode['prompt']}")
-
-    combined = """You will perform multiple types of code improvements. Complete each section in order.
-
-""" + "\n\n---\n\n".join(prompts) + """
-
----
-
-IMPORTANT: Work through each section systematically. Make atomic commits for each improvement with appropriate prefixes (fix:, refactor:, ux:, test:, docs:, security:, perf:, cleanup:, modernize:, a11y:).
-"""
-    return combined
-
-
-class LockFile:
-    """Prevent concurrent runs using a lock file."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.fd = None
-
-    def acquire(self) -> bool:
-        """Try to acquire lock. Returns True if successful."""
-        try:
-            self.fd = open(self.path, 'w')
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
-            self.fd.flush()
-            return True
-        except (IOError, OSError):
-            if self.fd:
-                self.fd.close()
-                self.fd = None
-            return False
-
-    def release(self):
-        """Release the lock."""
-        if self.fd:
-            try:
-                fcntl.flock(self.fd, fcntl.LOCK_UN)
-                self.fd.close()
-            except:
-                pass
-            finally:
-                self.fd = None
-        try:
-            self.path.unlink()
-        except:
-            pass
-
-
-class TelegramNotifier:
-    """Send notifications via Telegram bot."""
-
-    def __init__(self, bot_token: str | None, chat_id: str | None):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self.enabled = bool(bot_token and chat_id)
-
-    def send(self, message: str, parse_mode: str = "Markdown") -> bool:
-        """Send a message via Telegram. Returns True if successful."""
-        if not self.enabled:
-            return False
-
-        try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-            data = urllib.parse.urlencode({
-                "chat_id": self.chat_id,
-                "text": message,
-                "parse_mode": parse_mode,
-                "disable_web_page_preview": "true"
-            }).encode('utf-8')
-
-            req = urllib.request.Request(url, data=data)
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return response.status == 200
-        except Exception as e:
-            print(f"Failed to send Telegram message: {e}")
-            return False
-
-
-class AutoReviewer:
-    MAX_REVIEW_ITERATIONS = 3  # Max rounds of review -> fix -> review
-
-    def __init__(self, project_dir: str, base_branch: str = "main",
-                 auto_merge: bool = False, max_iterations: int = 3,
-                 tg_bot_token: str | None = None, tg_chat_id: str | None = None,
-                 review_prompt: str | None = None,
-                 modes: list[str] | None = None):
-        self.project_dir = Path(project_dir).resolve()
-        self.auto_merge = auto_merge
-        self.base_branch = base_branch
-        self.log_file = self.project_dir / "auto_review.log"
-        self.lock_file = LockFile(self.project_dir / ".auto_review.lock")
-        self.current_branch = None
-        self.telegram = TelegramNotifier(tg_bot_token, tg_chat_id)
-        self.max_iterations = max_iterations
-        self.modes = modes or ["fix_bugs"]  # Default to bug fixing
-        self.review_prompt = review_prompt or self._get_mode_prompt()
-
-    def _get_mode_prompt(self) -> str:
-        """Get the prompt based on selected modes."""
-        return get_combined_prompt(self.modes)
-
-    def get_mode_names(self) -> str:
-        """Get human-readable names of selected modes."""
-        names = []
-        for mode_key in self.modes:
-            if mode_key in IMPROVEMENT_MODES:
-                names.append(IMPROVEMENT_MODES[mode_key]["name"])
-        return ", ".join(names) if names else "Unknown"
-
-    def log(self, msg: str):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_line = f"[{timestamp}] {msg}"
-        print(log_line)
-        with open(self.log_file, "a") as f:
-            f.write(log_line + "\n")
-
-    def run_cmd(self, cmd: list[str], timeout: int = 60, cwd: Path = None) -> tuple[bool, str]:
-        """Run a shell command and return (success, output)."""
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=cwd or self.project_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-            output = result.stdout + result.stderr
-            return result.returncode == 0, output
-        except subprocess.TimeoutExpired:
-            return False, "Command timed out"
-        except Exception as e:
-            return False, str(e)
-
-    def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
-        """Run Claude Code with a prompt. Returns (success, output)."""
-        try:
-            result = subprocess.run(
-                ["claude", "--print", prompt],
-                cwd=self.project_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-            return result.returncode == 0, result.stdout + result.stderr
-        except subprocess.TimeoutExpired:
-            return False, "Claude timed out"
-        except Exception as e:
-            return False, str(e)
-
-    def generate_branch_name(self) -> str:
-        """Generate a unique branch name for this review."""
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
-        # Use first mode as branch prefix (simplified)
-        mode_prefix = self.modes[0].replace("_", "-") if self.modes else "review"
-        return f"auto-{mode_prefix}/{timestamp}-{suffix}"
-
-    def create_branch(self, branch_name: str) -> bool:
-        """Create and checkout a new branch."""
-        # First, ensure we're on the base branch and up to date
-        success, _ = self.run_cmd(["git", "checkout", self.base_branch])
-        if not success:
-            self.log(f"Failed to checkout {self.base_branch}")
-            return False
-
-        success, _ = self.run_cmd(["git", "pull", "--rebase"])
-        if not success:
-            self.log("Warning: Failed to pull latest changes")
-
-        # Create new branch
-        success, output = self.run_cmd(["git", "checkout", "-b", branch_name])
-        if not success:
-            self.log(f"Failed to create branch: {output}")
-            return False
-
-        self.current_branch = branch_name
-        self.log(f"Created branch: {branch_name}")
-        return True
-
-    def has_changes(self) -> bool:
-        """Check if there are uncommitted changes."""
-        success, output = self.run_cmd(["git", "status", "--porcelain"])
-        return success and bool(output.strip())
-
-    def has_commits_ahead(self) -> bool:
-        """Check if there are commits ahead of base branch."""
-        success, output = self.run_cmd(
-            ["git", "rev-list", "--count", f"{self.base_branch}..HEAD"]
-        )
-        if success:
-            try:
-                return int(output.strip()) > 0
-            except:
-                pass
-        return False
-
-    def run_review_and_fix(self) -> tuple[bool, str]:
-        """Run Claude to review code and make fixes. Returns (made_changes, summary)."""
-        self.log("Starting code review and fix...")
-        success, output = self.run_claude(self.review_prompt, timeout=3600)
-        self.log(f"Review output:\n{output[:2000]}...")
-        return success, output
-
-    def create_pull_request(self, summary: str) -> str | None:
-        """Create a PR and return the PR URL."""
-        if not self.has_commits_ahead():
-            self.log("No commits to create PR for")
-            return None
-
-        # Push the branch
-        success, output = self.run_cmd(
-            ["git", "push", "-u", "origin", self.current_branch],
-            timeout=120
-        )
-        if not success:
-            self.log(f"Failed to push branch: {output}")
-            return None
-
-        # Create PR using gh CLI
-        mode_names = self.get_mode_names()
-        pr_title = f"Auto-improvement: {mode_names} ({datetime.now().strftime('%Y-%m-%d')})"
-        pr_body = f"""## Automated Code Improvement
-
-This PR was created automatically by the auto-review daemon.
-
-### Improvement Modes Applied
-{mode_names}
-
-### Summary of Changes
-{summary[:3000]}
-
----
-*This PR requires review by another Claude instance before merging.*
-"""
-
-        success, output = self.run_cmd(
-            ["gh", "pr", "create",
-             "--title", pr_title,
-             "--body", pr_body,
-             "--base", self.base_branch],
-            timeout=60
-        )
-
-        if not success:
-            self.log(f"Failed to create PR: {output}")
-            return None
-
-        # Extract PR URL from output (look for github.com URL)
-        pr_url = None
-        for line in output.strip().split('\n'):
-            line = line.strip()
-            if 'github.com' in line and '/pull/' in line:
-                pr_url = line
-                break
-
-        if not pr_url:
-            self.log(f"Could not find PR URL in output: {output}")
-            return None
-
-        self.log(f"Created PR: {pr_url}")
-        return pr_url
-
-    def review_pr_with_claude(self, pr_url: str) -> tuple[bool, str, str]:
-        """Spawn a separate Claude instance to review the PR."""
-        self.log(f"Spawning reviewer Claude for PR: {pr_url}")
-
-        pr_number = pr_url.rstrip('/').split('/')[-1]
-
-        review_prompt = f"""You are a code reviewer. Please review PR #{pr_number}.
+def get_pr_review_prompt(pr_number: str) -> str:
+    return f"""You are a code reviewer. Please review PR #{pr_number}.
 
 1. First, get the PR details:
    - Run: gh pr view {pr_number}
@@ -834,36 +460,9 @@ Just output your decision clearly: either "APPROVED" or "CHANGES_REQUESTED" foll
 Be thorough but fair. Approve if the changes are net positive, even if not perfect.
 When requesting changes, be SPECIFIC about what needs to be fixed."""
 
-        success, output = self.run_claude(review_prompt, timeout=600)
-        self.log(f"Reviewer output:\n{output}")
 
-        # Check if PR was approved
-        output_lower = output.lower()
-        approved = (
-            "approved" in output_lower or
-            "lgtm" in output_lower or
-            "ready to merge" in output_lower or
-            "recommend merging" in output_lower
-        ) and "changes_requested" not in output_lower
-
-        feedback = self._extract_review_feedback(output)
-        return approved, output, feedback
-
-    def _extract_review_feedback(self, review_output: str) -> str:
-        """Extract the actionable feedback from reviewer output."""
-        match = re.search(r'CHANGES_REQUESTED[:\s]*(.+)', review_output, re.DOTALL | re.IGNORECASE)
-        if match:
-            return match.group(1).strip()[:1000]
-        lines = review_output.strip().split('\n')
-        return '\n'.join(lines[-20:])
-
-    def fix_pr_feedback(self, pr_url: str, feedback: str, iteration: int) -> tuple[bool, str]:
-        """Spawn Claude to address reviewer feedback and push fixes."""
-        self.log(f"Spawning fixer Claude to address feedback (iteration {iteration})")
-
-        pr_number = pr_url.rstrip('/').split('/')[-1]
-
-        fix_prompt = f"""A code reviewer has requested changes on PR #{pr_number}. Please address their feedback.
+def get_fix_feedback_prompt(pr_number: str, feedback: str) -> str:
+    return f"""A code reviewer has requested changes on PR #{pr_number}. Please address their feedback.
 
 **Reviewer Feedback:**
 {feedback}
@@ -885,159 +484,328 @@ When requesting changes, be SPECIFIC about what needs to be fixed."""
 
 IMPORTANT: Actually make the fixes, don't just describe them."""
 
-        success, output = self.run_claude(fix_prompt, timeout=1200)
-        self.log(f"Fixer output:\n{output[:2000]}...")
-        return success, output
+
+def get_combined_prompt(mode_keys: list[str]) -> str:
+    if len(mode_keys) == 1:
+        return IMPROVEMENT_MODES[mode_keys[0]]["prompt"]
+
+    prompts = []
+    for key in mode_keys:
+        if key in IMPROVEMENT_MODES:
+            mode = IMPROVEMENT_MODES[key]
+            prompts.append(f"## {mode['name']}\n\n{mode['prompt']}")
+
+    return """You will perform multiple types of code improvements. Complete each section in order.
+
+""" + "\n\n---\n\n".join(prompts) + """
+
+---
+
+IMPORTANT: Work through each section systematically. Make atomic commits for each improvement with appropriate prefixes (fix:, refactor:, ux:, test:, docs:, security:, perf:, cleanup:, modernize:, a11y:).
+"""
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def get_mode_list() -> str:
+    lines = ["\nAvailable improvement modes:\n"]
+    for key, mode in IMPROVEMENT_MODES.items():
+        lines.append(f"  {key:20} - {mode['description']}")
+    lines.append(f"\n  {'all':20} - Run all improvement modes sequentially")
+    lines.append(f"  {'interactive':20} - Interactively select modes to run")
+    lines.append(f"\n  {'northstar':20} - Iterate towards goals defined in NORTHSTAR.md")
+    return "\n".join(lines)
+
+
+def create_default_northstar(project_dir: Path) -> tuple[bool, str]:
+    northstar_path = project_dir / "NORTHSTAR.md"
+    if northstar_path.exists():
+        return False, f"NORTHSTAR.md already exists at {northstar_path}"
+    try:
+        northstar_path.write_text(NORTHSTAR_TEMPLATE)
+        return True, f"Created NORTHSTAR.md at {northstar_path}"
+    except Exception as e:
+        return False, f"Failed to create NORTHSTAR.md: {e}"
+
+
+def load_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
+    northstar_path = project_dir / "NORTHSTAR.md"
+    if not northstar_path.exists():
+        return None, f"NORTHSTAR.md not found in {project_dir}"
+    try:
+        content = northstar_path.read_text()
+    except Exception as e:
+        return None, f"Failed to read NORTHSTAR.md: {e}"
+    if not content.strip():
+        return None, "NORTHSTAR.md is empty"
+    return get_northstar_prompt(content), None
+
+
+def select_modes_interactive() -> list[str]:
+    print("\n" + "=" * 60)
+    print("Select improvement modes to run")
+    print("=" * 60 + "\n")
+
+    modes = list(IMPROVEMENT_MODES.keys())
+    for i, key in enumerate(modes, 1):
+        mode = IMPROVEMENT_MODES[key]
+        print(f"  [{i:2}] {mode['name']:25} - {mode['description']}")
+
+    print(f"\n  [ 0] All modes")
+    print(f"  [ q] Quit")
+    print("\nEnter mode numbers separated by space (e.g., '1 3 5'), or '0' for all:")
+
+    try:
+        choice = input("> ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return []
+
+    if choice == 'q' or choice == '':
+        return []
+    if choice == '0':
+        return modes
+
+    selected = []
+    for num in choice.split():
+        try:
+            idx = int(num) - 1
+            if 0 <= idx < len(modes):
+                selected.append(modes[idx])
+        except ValueError:
+            if num in modes:
+                selected.append(num)
+    return selected
+
+# ============================================================================
+# CORE CLASSES
+# ============================================================================
+
+class LockFile:
+    def __init__(self, path: Path):
+        self.path = path
+        self.fd = None
+
+    def acquire(self) -> bool:
+        try:
+            self.fd = open(self.path, 'w')
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
+            self.fd.flush()
+            return True
+        except (IOError, OSError):
+            if self.fd:
+                self.fd.close()
+                self.fd = None
+            return False
+
+    def release(self):
+        if self.fd:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+                self.fd.close()
+            except:
+                pass
+            finally:
+                self.fd = None
+        try:
+            self.path.unlink()
+        except:
+            pass
+
+
+class TelegramNotifier:
+    def __init__(self, bot_token: str | None, chat_id: str | None):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.enabled = bool(bot_token and chat_id)
+
+    def send(self, message: str) -> bool:
+        if not self.enabled:
+            return False
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            data = urllib.parse.urlencode({
+                "chat_id": self.chat_id,
+                "text": message,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": "true"
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return response.status == 200
+        except Exception as e:
+            print(f"Failed to send Telegram message: {e}")
+            return False
+
+
+class AutoReviewer:
+    def __init__(self, project_dir: str, base_branch: str = "main",
+                 auto_merge: bool = False, max_iterations: int = 3,
+                 tg_bot_token: str | None = None, tg_chat_id: str | None = None,
+                 review_prompt: str | None = None, modes: list[str] | None = None):
+        self.project_dir = Path(project_dir).resolve()
+        self.auto_merge = auto_merge
+        self.base_branch = base_branch
+        self.log_file = self.project_dir / "auto_review.log"
+        self.lock_file = LockFile(self.project_dir / ".auto_review.lock")
+        self.current_branch = None
+        self.telegram = TelegramNotifier(tg_bot_token, tg_chat_id)
+        self.max_iterations = max_iterations
+        self.modes = modes or ["fix_bugs"]
+        self.review_prompt = review_prompt or get_combined_prompt(self.modes)
+
+    def get_mode_names(self) -> str:
+        names = [IMPROVEMENT_MODES[m]["name"] for m in self.modes if m in IMPROVEMENT_MODES]
+        return ", ".join(names) if names else "Unknown"
+
+    def log(self, msg: str):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_line = f"[{timestamp}] {msg}"
+        print(log_line)
+        with open(self.log_file, "a") as f:
+            f.write(log_line + "\n")
+
+    def run_cmd(self, cmd: list[str], timeout: int = 60) -> tuple[bool, str]:
+        try:
+            result = subprocess.run(cmd, cwd=self.project_dir, capture_output=True, text=True, timeout=timeout)
+            return result.returncode == 0, result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            return False, "Command timed out"
+        except Exception as e:
+            return False, str(e)
+
+    def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
+        try:
+            result = subprocess.run(["claude", "--print", prompt], cwd=self.project_dir, capture_output=True, text=True, timeout=timeout)
+            return result.returncode == 0, result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            return False, "Claude timed out"
+        except Exception as e:
+            return False, str(e)
+
+    def generate_branch_name(self) -> str:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
+        mode_prefix = self.modes[0].replace("_", "-") if self.modes else "review"
+        return f"auto-{mode_prefix}/{timestamp}-{suffix}"
+
+    def create_branch(self, branch_name: str) -> bool:
+        self.run_cmd(["git", "checkout", self.base_branch])
+        self.run_cmd(["git", "pull", "--rebase"])
+        success, output = self.run_cmd(["git", "checkout", "-b", branch_name])
+        if success:
+            self.current_branch = branch_name
+            self.log(f"Created branch: {branch_name}")
+        return success
+
+    def has_commits_ahead(self) -> bool:
+        success, output = self.run_cmd(["git", "rev-list", "--count", f"{self.base_branch}..HEAD"])
+        try:
+            return success and int(output.strip()) > 0
+        except:
+            return False
+
+    def create_pull_request(self, summary: str) -> str | None:
+        if not self.has_commits_ahead():
+            return None
+        success, _ = self.run_cmd(["git", "push", "-u", "origin", self.current_branch], timeout=120)
+        if not success:
+            return None
+
+        mode_names = self.get_mode_names()
+        pr_title = f"Auto-improvement: {mode_names} ({datetime.now().strftime('%Y-%m-%d')})"
+        pr_body = f"## Automated Code Improvement\n\n### Modes: {mode_names}\n\n### Summary\n{summary[:3000]}"
+
+        success, output = self.run_cmd(["gh", "pr", "create", "--title", pr_title, "--body", pr_body, "--base", self.base_branch], timeout=60)
+        if not success:
+            return None
+
+        for line in output.strip().split('\n'):
+            if 'github.com' in line and '/pull/' in line:
+                self.log(f"Created PR: {line.strip()}")
+                return line.strip()
+        return None
+
+    def review_pr_with_claude(self, pr_url: str) -> tuple[bool, str, str]:
+        pr_number = pr_url.rstrip('/').split('/')[-1]
+        success, output = self.run_claude(get_pr_review_prompt(pr_number), timeout=600)
+        output_lower = output.lower()
+        approved = ("approved" in output_lower or "lgtm" in output_lower) and "changes_requested" not in output_lower
+        match = re.search(r'CHANGES_REQUESTED[:\s]*(.+)', output, re.DOTALL | re.IGNORECASE)
+        feedback = match.group(1).strip()[:1000] if match else '\n'.join(output.strip().split('\n')[-20:])
+        return approved, output, feedback
+
+    def fix_pr_feedback(self, pr_url: str, feedback: str, iteration: int) -> tuple[bool, str]:
+        pr_number = pr_url.rstrip('/').split('/')[-1]
+        return self.run_claude(get_fix_feedback_prompt(pr_number, feedback), timeout=1200)
 
     def merge_pr(self, pr_url: str) -> bool:
-        """Merge the PR."""
         pr_number = pr_url.rstrip('/').split('/')[-1]
-
-        success, output = self.run_cmd(
-            ["gh", "pr", "merge", pr_number, "--squash", "--delete-branch"],
-            timeout=60
-        )
-
-        if success:
-            self.log(f"PR #{pr_number} merged successfully")
-        else:
-            self.log(f"Failed to merge PR: {output}")
-
+        success, _ = self.run_cmd(["gh", "pr", "merge", pr_number, "--squash", "--delete-branch"], timeout=60)
         return success
 
     def cleanup_branch(self):
-        """Return to base branch and clean up."""
         if self.current_branch:
             self.run_cmd(["git", "checkout", self.base_branch])
             self.current_branch = None
 
-    def _extract_summary_for_telegram(self, text: str, max_len: int = 500) -> str:
-        """Extract a clean summary suitable for Telegram message."""
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        if len(text) > max_len:
-            text = text[:max_len] + "..."
-        text = text.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
-        return text
-
     def run_once(self) -> bool:
-        """Run a single review cycle with proper locking."""
-
         if not self.lock_file.acquire():
-            self.log("Another review is already running (lock file exists), skipping")
+            self.log("Another review is already running, skipping")
             return False
 
         try:
             self.log("=" * 60)
             self.log("Starting review cycle")
 
-            # Create a new branch
             branch_name = self.generate_branch_name()
             if not self.create_branch(branch_name):
-                self.log("Failed to create branch")
                 self.telegram.send("⚠️ *Auto-Review Failed*\n\nCould not create branch.")
                 return False
 
-            # Run review and make fixes
-            success, summary = self.run_review_and_fix()
+            self.log("Running Claude...")
+            success, summary = self.run_claude(self.review_prompt, timeout=3600)
             if not success:
-                self.log("Review failed")
                 self.cleanup_branch()
-                self.telegram.send("⚠️ *Auto-Review Failed*\n\nClaude failed to complete review.")
+                self.telegram.send("⚠️ *Auto-Review Failed*\n\nClaude failed.")
                 return False
 
-            # Check if any fixes were made
             if not self.has_commits_ahead():
-                self.log("No bugs found or fixed, nothing to PR")
+                self.log("No changes made")
                 self.cleanup_branch()
-                self.telegram.send("✅ *Auto-Review Complete*\n\nNo bugs found. Code looks good!")
+                self.telegram.send("✅ *Auto-Review Complete*\n\nNo changes needed.")
                 return True
 
             pr_url = self.create_pull_request(summary)
             if not pr_url:
-                self.log("Failed to create PR")
                 self.cleanup_branch()
                 self.telegram.send("⚠️ *Auto-Review Failed*\n\nCould not create PR.")
                 return False
 
             # Review-fix loop
-            all_fixes_summary = [summary]
-            iteration = 0
-
-            while iteration < self.max_iterations:
-                iteration += 1
+            for iteration in range(1, self.max_iterations + 1):
                 self.log(f"Review iteration {iteration}/{self.max_iterations}")
-
-                approved, review_output, feedback = self.review_pr_with_claude(pr_url)
+                approved, _, feedback = self.review_pr_with_claude(pr_url)
 
                 if approved:
-                    self.log(f"PR approved by reviewer on iteration {iteration}")
-                    clean_summary = self._extract_summary_for_telegram('\n\n'.join(all_fixes_summary))
-
+                    self.log(f"PR approved on iteration {iteration}")
                     if self.auto_merge:
-                        merged = self.merge_pr(pr_url)
-                        if merged:
-                            self.telegram.send(
-                                f"✅ *Auto-Review Merged*\n\n"
-                                f"Approved after {iteration} review(s).\n"
-                                f"🔗 {pr_url}\n\n"
-                                f"*Changes:*\n{clean_summary}"
-                            )
-                        else:
-                            self.telegram.send(
-                                f"⚠️ *Auto-Review: Merge Failed*\n\n"
-                                f"PR approved but merge failed.\n"
-                                f"🔗 {pr_url}\n\n"
-                                f"*Changes:*\n{clean_summary}"
-                            )
+                        self.merge_pr(pr_url)
+                        self.telegram.send(f"✅ *Auto-Review Merged*\n🔗 {pr_url}")
                     else:
-                        self.log(f"Auto-merge disabled. PR ready for manual merge: {pr_url}")
-                        self.telegram.send(
-                            f"✅ *Auto-Review: PR Ready*\n\n"
-                            f"Approved after {iteration} review(s). Ready for manual merge.\n"
-                            f"🔗 {pr_url}\n\n"
-                            f"*Changes:*\n{clean_summary}"
-                        )
-
-                    self.cleanup_branch()
-                    self.log("Review cycle complete - PR approved")
-                    self.log("=" * 60)
-                    return True
-
-                # Not approved - have fixer Claude address the feedback
-                self.log(f"Reviewer requested changes on iteration {iteration}")
-                self.telegram.send(
-                    f"🔄 *Auto-Review: Fixing feedback*\n\n"
-                    f"Iteration {iteration}/{self.max_iterations}\n"
-                    f"🔗 {pr_url}\n\n"
-                    f"Reviewer requested changes. Spawning fixer Claude..."
-                )
-
-                fix_success, fix_output = self.fix_pr_feedback(pr_url, feedback, iteration)
-
-                if not fix_success:
-                    self.log(f"Fixer failed on iteration {iteration}")
-                    self.telegram.send(
-                        f"⚠️ *Auto-Review: Fixer Failed*\n\n"
-                        f"Could not address reviewer feedback on iteration {iteration}.\n"
-                        f"🔗 {pr_url}\n\n"
-                        f"Manual intervention may be needed."
-                    )
+                        self.telegram.send(f"✅ *Auto-Review: PR Ready*\n🔗 {pr_url}")
                     break
 
-                all_fixes_summary.append(f"Iteration {iteration} fixes:\n{fix_output[:500]}")
-                self.log(f"Fixer completed iteration {iteration}, re-running review...")
-
-            # Max iterations reached
-            if iteration >= self.max_iterations:
-                self.log(f"Max iterations ({self.max_iterations}) reached without approval")
-                clean_summary = self._extract_summary_for_telegram('\n\n'.join(all_fixes_summary))
-                self.telegram.send(
-                    f"⚠️ *Auto-Review: Max Iterations Reached*\n\n"
-                    f"PR not approved after {self.max_iterations} rounds.\n"
-                    f"🔗 {pr_url}\n\n"
-                    f"*Summary:*\n{clean_summary}\n\n"
-                    f"Manual review recommended."
-                )
+                self.log(f"Changes requested, fixing...")
+                self.telegram.send(f"🔄 Fixing feedback (iteration {iteration})")
+                fix_success, _ = self.fix_pr_feedback(pr_url, feedback, iteration)
+                if not fix_success:
+                    self.telegram.send(f"⚠️ *Fixer Failed*\n🔗 {pr_url}")
+                    break
+            else:
+                self.telegram.send(f"⚠️ *Max iterations reached*\n🔗 {pr_url}")
 
             self.cleanup_branch()
             self.log("Review cycle complete")
@@ -1047,129 +815,83 @@ IMPORTANT: Actually make the fixes, don't just describe them."""
         finally:
             self.lock_file.release()
 
+# ============================================================================
+# SCHEDULING
+# ============================================================================
 
-def run_with_interval(reviewer: AutoReviewer, interval_seconds: int):
-    """Run reviews at fixed intervals, skipping if previous run is still going."""
-    print(f"Running reviews every {interval_seconds}s. Press Ctrl+C to stop.")
-    print("Note: If a run takes longer than interval, next run will be skipped.")
-
+def run_with_interval(reviewer: AutoReviewer, interval: int):
+    print(f"Running every {interval}s. Press Ctrl+C to stop.")
     while True:
-        start_time = time.time()
+        start = time.time()
         reviewer.run_once()
-        elapsed = time.time() - start_time
-
-        sleep_time = max(0, interval_seconds - elapsed)
+        sleep_time = max(0, interval - (time.time() - start))
         if sleep_time > 0:
             time.sleep(sleep_time)
-        else:
-            print(f"Run took {elapsed:.0f}s (longer than interval), continuing immediately")
 
 
 def run_with_cron(reviewer: AutoReviewer, cron_expr: str):
-    """Run reviews on a cron schedule."""
     if not HAS_CRONITER:
-        print("Error: croniter package required for cron scheduling")
-        print("Install with: pip install croniter")
+        print("Error: pip install croniter")
         sys.exit(1)
-
-    print(f"Running reviews on cron schedule: {cron_expr}")
+    print(f"Running on cron: {cron_expr}")
     cron = croniter(cron_expr, datetime.now())
-
     while True:
         next_run = cron.get_next(datetime)
-        wait_seconds = (next_run - datetime.now()).total_seconds()
-
-        if wait_seconds > 0:
-            print(f"Next run at {next_run}, sleeping {wait_seconds:.0f}s")
-            time.sleep(wait_seconds)
-
+        wait = (next_run - datetime.now()).total_seconds()
+        if wait > 0:
+            print(f"Next run at {next_run}")
+            time.sleep(wait)
         reviewer.run_once()
 
+# ============================================================================
+# CLI
+# ============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Auto-improvement daemon - spawns Claude to improve code and create PRs",
+        description="Claude Automator - Automatically improve your codebase",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=get_mode_list()
     )
-
-    # Execution mode
     parser.add_argument("--interval", type=int, help="Run every N seconds")
-    parser.add_argument("--cron", type=str, help="Cron expression (e.g., '0 */4 * * *')")
+    parser.add_argument("--cron", type=str, help="Cron expression")
     parser.add_argument("--once", action="store_true", help="Run once and exit")
-
-    # Improvement mode selection
-    parser.add_argument("--mode", "-m", type=str, action="append", dest="modes",
-                        help="Improvement mode to run (can specify multiple times). "
-                             "Use 'all' for all modes, 'interactive' to select interactively.")
-    parser.add_argument("--northstar", "-n", action="store_true",
-                        help="Iterate towards goals defined in NORTHSTAR.md (shortcut for -m northstar)")
-    parser.add_argument("--init-northstar", action="store_true",
-                        help="Create a default NORTHSTAR.md template and exit")
-    parser.add_argument("--list-modes", action="store_true",
-                        help="List available improvement modes and exit")
-
-    # Project settings
-    parser.add_argument("--project-dir", type=str, default=os.getcwd(),
-                        help="Project directory to review (default: current directory)")
-    parser.add_argument("--auto-merge", action="store_true",
-                        help="Automatically merge approved PRs")
-    parser.add_argument("--base-branch", type=str, default="main",
-                        help="Base branch for PRs (default: main)")
-
-    # Notifications
-    parser.add_argument("--tg-bot-token", type=str,
-                        default=os.environ.get("TG_BOT_TOKEN"),
-                        help="Telegram bot token (or set TG_BOT_TOKEN env var)")
-    parser.add_argument("--tg-chat-id", type=str,
-                        default=os.environ.get("TG_CHAT_ID"),
-                        help="Telegram chat ID (or set TG_CHAT_ID env var)")
-
-    # Advanced options
-    parser.add_argument("--max-iterations", type=int, default=3,
-                        help="Max review-fix iterations before giving up (default: 3)")
-    parser.add_argument("--prompt-file", type=str,
-                        help="Path to custom review prompt file (overrides --mode)")
+    parser.add_argument("--mode", "-m", type=str, action="append", dest="modes", help="Improvement mode")
+    parser.add_argument("--northstar", "-n", action="store_true", help="Use NORTHSTAR.md")
+    parser.add_argument("--init-northstar", action="store_true", help="Create NORTHSTAR.md template")
+    parser.add_argument("--list-modes", action="store_true", help="List modes")
+    parser.add_argument("--project-dir", type=str, default=os.getcwd(), help="Project directory")
+    parser.add_argument("--auto-merge", action="store_true", help="Auto-merge approved PRs")
+    parser.add_argument("--base-branch", type=str, default="main", help="Base branch")
+    parser.add_argument("--max-iterations", type=int, default=3, help="Max review-fix iterations")
+    parser.add_argument("--tg-bot-token", type=str, default=os.environ.get("TG_BOT_TOKEN"))
+    parser.add_argument("--tg-chat-id", type=str, default=os.environ.get("TG_CHAT_ID"))
+    parser.add_argument("--prompt-file", type=str, help="Custom prompt file")
 
     args = parser.parse_args()
 
-    # Handle --list-modes
     if args.list_modes:
         print(get_mode_list())
         sys.exit(0)
 
-    # Handle --init-northstar
     if args.init_northstar:
-        project_path = Path(args.project_dir).resolve()
-        success, message = create_default_northstar(project_path)
-        print(message)
+        success, msg = create_default_northstar(Path(args.project_dir).resolve())
+        print(msg)
         if success:
-            print("\nNext steps:")
-            print("  1. Edit NORTHSTAR.md to customize goals for your project")
-            print("  2. Run: python auto_review.py --once --northstar")
+            print("\nNext: Edit NORTHSTAR.md, then run with --northstar")
         sys.exit(0 if success else 1)
 
-    # Determine which modes to run
+    project_path = Path(args.project_dir).resolve()
     selected_modes = []
     review_prompt = None
-    project_path = Path(args.project_dir).resolve()
 
-    # Handle --northstar flag (shortcut for -m northstar)
     if args.northstar:
         args.modes = ["northstar"]
 
     if args.prompt_file:
-        # Custom prompt overrides modes
-        prompt_path = Path(args.prompt_file)
-        if prompt_path.exists():
-            review_prompt = prompt_path.read_text()
-            print(f"Loaded custom prompt from {args.prompt_file}")
-            selected_modes = ["custom"]
-        else:
-            print(f"Error: Prompt file not found: {args.prompt_file}")
-            sys.exit(1)
+        review_prompt = Path(args.prompt_file).read_text()
+        selected_modes = ["custom"]
     elif args.modes:
-        # Handle mode selection from CLI
         for mode in args.modes:
             if mode == "all":
                 selected_modes = list(IMPROVEMENT_MODES.keys())
@@ -1177,57 +899,36 @@ def main():
             elif mode == "interactive":
                 selected_modes = select_modes_interactive()
                 if not selected_modes:
-                    print("No modes selected. Exiting.")
                     sys.exit(0)
                 break
             elif mode == "northstar":
-                # Special handling for northstar mode
-                northstar_prompt, error = get_northstar_prompt(project_path)
+                prompt, error = load_northstar_prompt(project_path)
                 if error:
-                    print(f"Error: {error}")
-                    print("\nTo use northstar mode, create a NORTHSTAR.md file in your project root.")
-                    print("This file should describe your project vision, goals, and milestones.")
+                    print(f"Error: {error}\nRun: ./claude_automator.py --init-northstar")
                     sys.exit(1)
-                review_prompt = northstar_prompt
+                review_prompt = prompt
                 selected_modes = ["northstar"]
                 break
             elif mode in IMPROVEMENT_MODES:
-                if mode not in selected_modes:
-                    selected_modes.append(mode)
+                selected_modes.append(mode)
             else:
-                print(f"Error: Unknown mode '{mode}'")
+                print(f"Unknown mode: {mode}")
                 print(get_mode_list())
                 sys.exit(1)
     else:
-        # No mode specified - use interactive selection
-        print("No improvement mode specified. Starting interactive selection...")
         selected_modes = select_modes_interactive()
         if not selected_modes:
-            print("No modes selected. Exiting.")
             sys.exit(0)
 
-    # Show status
     print("\n" + "=" * 60)
-    print("Auto-Improvement Daemon")
+    print("Claude Automator")
     print("=" * 60)
-
-    if args.tg_bot_token and args.tg_chat_id:
-        print(f"Telegram notifications: ENABLED")
-    else:
-        print("Telegram notifications: DISABLED")
-
-    print(f"Project directory: {args.project_dir}")
-    print(f"Base branch: {args.base_branch}")
-    print(f"Max review-fix iterations: {args.max_iterations}")
-
+    print(f"Project: {args.project_dir}")
+    print(f"Branch: {args.base_branch}")
     if "northstar" in selected_modes:
-        print(f"Mode: North Star (iterating towards NORTHSTAR.md goals)")
-    elif review_prompt and "custom" in selected_modes:
-        print(f"Using custom prompt from file")
+        print("Mode: North Star")
     else:
-        mode_names = [IMPROVEMENT_MODES[m]["name"] for m in selected_modes if m in IMPROVEMENT_MODES]
-        print(f"Selected modes: {', '.join(mode_names)}")
-
+        print(f"Modes: {', '.join(IMPROVEMENT_MODES[m]['name'] for m in selected_modes if m in IMPROVEMENT_MODES)}")
     print("=" * 60 + "\n")
 
     reviewer = AutoReviewer(
@@ -1242,8 +943,7 @@ def main():
     )
 
     if args.once:
-        success = reviewer.run_once()
-        sys.exit(0 if success else 1)
+        sys.exit(0 if reviewer.run_once() else 1)
     elif args.interval:
         run_with_interval(reviewer, args.interval)
     elif args.cron:

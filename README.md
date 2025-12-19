@@ -1,18 +1,32 @@
-# Auto-Improvement Daemon
+# Claude Automator
 
-A tool that spawns Claude Code to automatically improve your codebase. Choose from predefined improvement modes or define your own goals with a `NORTHSTAR.md` file.
+Automatically improve your codebase with Claude Code. Choose from predefined improvement modes or define your own goals with a `NORTHSTAR.md` file.
+
+## Installation
+
+No installation required. Just download the script:
+
+```bash
+# Download to your project
+curl -O https://raw.githubusercontent.com/friday-james/claude-code-automator/main/claude_automator.py
+chmod +x claude_automator.py
+
+# Or clone the repo
+git clone https://github.com/friday-james/claude-code-automator.git
+```
 
 ## Quick Start
 
 ```bash
-# Create a NORTHSTAR.md with default goals
-python auto_review.py --init-northstar
+# Navigate to your project
+cd /path/to/your/project
 
-# Run improvements towards your North Star
-python auto_review.py --once --northstar
+# Run an improvement mode
+./claude_automator.py --once -m improve_code
 
-# Or pick specific improvement modes
-python auto_review.py --once -m improve_code -m add_tests
+# Or create a NORTHSTAR.md and iterate towards your goals
+./claude_automator.py --init-northstar
+./claude_automator.py --once --northstar
 ```
 
 ---
@@ -57,13 +71,12 @@ python auto_review.py --once -m improve_code -m add_tests
 
 The **North Star** mode lets you define your own project vision and goals. Claude will automatically iterate towards them with each run.
 
-### Create a NORTHSTAR.md
-
 ```bash
-# Generate a default template
-python auto_review.py --init-northstar
+# Create a template
+claude-automator --init-northstar
 
-# Or create your own NORTHSTAR.md manually
+# Edit NORTHSTAR.md to customize your goals, then run:
+claude-automator --once --northstar
 ```
 
 ### Example NORTHSTAR.md
@@ -84,90 +97,47 @@ Build a fast, secure, and user-friendly API.
 ### Should Have
 - [ ] Response time < 100ms for all endpoints
 - [ ] API documentation with examples
-- [ ] Error messages are helpful to developers
 
 ### Nice to Have
 - [ ] Rate limiting on public endpoints
-- [ ] Request/response logging
 ```
-
-### Run North Star Mode
-
-```bash
-# Iterate towards your goals
-python auto_review.py --once --northstar
-
-# Or equivalently
-python auto_review.py --once -m northstar
-```
-
-Claude will:
-1. Read your `NORTHSTAR.md`
-2. Analyze the current codebase
-3. Make incremental progress towards uncompleted goals
-4. Optionally update `NORTHSTAR.md` to mark completed items
 
 ---
 
 ## Usage Examples
 
-### Single Improvement Mode
-
 ```bash
-python auto_review.py --once -m fix_bugs
-python auto_review.py --once -m add_tests
-python auto_review.py --once -m security
-```
+# Single mode
+./claude_automator.py --once -m fix_bugs
 
-### Multiple Modes
+# Multiple modes
+./claude_automator.py --once -m fix_bugs -m add_tests -m security
 
-```bash
-python auto_review.py --once -m fix_bugs -m improve_code -m add_tests
-```
+# All modes
+./claude_automator.py --once -m all
 
-### All Modes
+# Interactive selection
+./claude_automator.py --once -m interactive
 
-```bash
-python auto_review.py --once -m all
-```
+# North Star mode
+./claude_automator.py --once --northstar
 
-### Interactive Selection
+# List available modes
+./claude_automator.py --list-modes
 
-```bash
-python auto_review.py --once -m interactive
-# Or just omit the mode to get prompted:
-python auto_review.py --once
-```
+# Run every hour
+./claude_automator.py --interval 3600 -m improve_code
 
-### List Available Modes
+# Run on cron schedule (requires: pip install croniter)
+./claude_automator.py --cron "0 */4 * * *" --northstar
 
-```bash
-python auto_review.py --list-modes
-```
+# Auto-merge approved PRs
+./claude_automator.py --once --northstar --auto-merge
 
-### Scheduled Runs
-
-```bash
-# Every hour
-python auto_review.py --interval 3600 --northstar
-
-# Every 4 hours via cron
-pip install croniter
-python auto_review.py --cron "0 */4 * * *" --northstar
-```
-
-### Auto-Merge Approved PRs
-
-```bash
-python auto_review.py --once --northstar --auto-merge
-```
-
-### With Telegram Notifications
-
-```bash
+# With Telegram notifications
 export TG_BOT_TOKEN="your_bot_token"
 export TG_CHAT_ID="your_chat_id"
-python auto_review.py --once --northstar
+./claude_automator.py --once --northstar
 ```
 
 ---
@@ -180,7 +150,7 @@ python auto_review.py --once --northstar
 | `--interval N` | Run every N seconds |
 | `--cron "expr"` | Run on cron schedule |
 | `-m, --mode MODE` | Improvement mode (can specify multiple) |
-| `-n, --northstar` | Use North Star mode (shortcut for `-m northstar`) |
+| `-n, --northstar` | Iterate towards NORTHSTAR.md goals |
 | `--init-northstar` | Create a default NORTHSTAR.md template |
 | `--list-modes` | List all available modes |
 | `--project-dir PATH` | Project directory (default: current dir) |
@@ -197,7 +167,7 @@ python auto_review.py --once --northstar
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     AUTO-IMPROVEMENT FLOW                    │
+│                       CLAUDE AUTOMATOR                       │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  1. SELECT MODE                                             │
@@ -232,23 +202,12 @@ python auto_review.py --once --northstar
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.10+ (no external dependencies)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated
 - Git repository with remote configured
 
-### Optional
-
-- `croniter` for cron scheduling: `pip install croniter`
-
----
-
-## Telegram Setup
-
-1. Create a bot with [@BotFather](https://t.me/BotFather) and get the token
-2. Get your chat ID from [@userinfobot](https://t.me/userinfobot)
-3. Start a chat with your bot (send `/start`)
-4. Set environment variables or pass as arguments
+Optional: `pip install croniter` for cron scheduling support
 
 ---
 
