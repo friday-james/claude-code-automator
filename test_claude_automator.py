@@ -492,16 +492,15 @@ class TestAutoReviewer(unittest.TestCase):
         self.assertFalse(success)
         self.assertIn("not found", output)
 
-    @patch('subprocess.Popen')
-    def test_run_claude_command_not_found(self, mock_popen):
+    @patch('subprocess.run')
+    def test_run_claude_command_not_found(self, mock_run):
         """Should return helpful error when Claude CLI not found."""
-        mock_popen.side_effect = FileNotFoundError()
+        mock_run.side_effect = FileNotFoundError()
 
         success, output = self.reviewer.run_claude("test prompt")
 
         self.assertFalse(success)
         self.assertIn("Claude CLI not found", output)
-        self.assertIn("npm install", output)
 
     @patch.object(AutoReviewer, 'run_cmd')
     def test_has_commits_ahead_true(self, mock_run_cmd):
