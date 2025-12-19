@@ -750,11 +750,26 @@ class LockFile:
 
     Uses fcntl.flock for advisory locking. The lock file contains the PID
     and timestamp of the process that acquired the lock.
+
+    Can be used as a context manager for automatic cleanup:
+        with LockFile(path) as lock:
+            if lock.acquired:
+                # do work while holding the lock
     """
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.fd: IO[str] | None = None
+        self.acquired: bool = False
+
+    def __enter__(self) -> "LockFile":
+        """Context manager entry - attempts to acquire the lock."""
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit - releases the lock."""
+        self.release()
 
     def acquire(self) -> bool:
         """Attempt to acquire the lock. Returns True if successful."""
@@ -763,11 +778,13 @@ class LockFile:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
             self.fd.flush()
+            self.acquired = True
             return True
         except (IOError, OSError):
             if self.fd:
                 self.fd.close()
                 self.fd = None
+            self.acquired = False
             return False
 
     def release(self) -> None:
@@ -780,9 +797,10 @@ class LockFile:
                 pass
             finally:
                 self.fd = None
+                self.acquired = False
         try:
             self.path.unlink()
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
             pass
 
 

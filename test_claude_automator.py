@@ -383,6 +383,61 @@ class TestLockFile(unittest.TestCase):
             # Should not raise
             lock.release()
 
+    def test_context_manager_acquires_and_releases(self):
+        """Should work as a context manager for automatic cleanup."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            with LockFile(lock_path) as lock:
+                self.assertTrue(lock.acquired)
+                self.assertTrue(lock_path.exists())
+            # After context manager exit, lock should be released
+            self.assertFalse(lock.acquired)
+            self.assertFalse(lock_path.exists())
+
+    def test_context_manager_releases_on_exception(self):
+        """Should release lock even when exception occurs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            try:
+                with LockFile(lock_path) as lock:
+                    self.assertTrue(lock.acquired)
+                    raise ValueError("Test exception")
+            except ValueError:
+                pass
+            # Lock should still be released despite exception
+            self.assertFalse(lock.acquired)
+            self.assertFalse(lock_path.exists())
+
+    def test_acquired_attribute_reflects_state(self):
+        """Should track acquired state accurately."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            lock = LockFile(lock_path)
+
+            # Initially not acquired
+            self.assertFalse(lock.acquired)
+
+            # After acquire
+            self.assertTrue(lock.acquire())
+            self.assertTrue(lock.acquired)
+
+            # After release
+            lock.release()
+            self.assertFalse(lock.acquired)
+
+    def test_failed_acquire_sets_acquired_false(self):
+        """Should set acquired to False when acquire fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            lock1 = LockFile(lock_path)
+            lock2 = LockFile(lock_path)
+
+            lock1.acquire()
+            self.assertFalse(lock2.acquire())
+            self.assertFalse(lock2.acquired)
+
+            lock1.release()
+
 
 class TestTelegramNotifier(unittest.TestCase):
     """Tests for TelegramNotifier class."""
