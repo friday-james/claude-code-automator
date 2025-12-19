@@ -858,11 +858,15 @@ class AutoReviewer:
                 prompt_file = f.name
 
             try:
+                # Read prompt from file to pass directly to claude
+                with open(prompt_file, 'r') as pf:
+                    prompt_content = pf.read()
+
                 # Run claude with stream-json + verbose for real-time output and usage
+                # Using shell=False with list args is safer than shell=True with string
                 process = subprocess.Popen(
-                    f'claude --print --output-format stream-json --verbose "$(cat \'{prompt_file}\')"',
+                    ["claude", "--print", "--output-format", "stream-json", "--verbose", prompt_content],
                     cwd=self.project_dir,
-                    shell=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
