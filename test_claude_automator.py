@@ -662,5 +662,247 @@ class TestAutoReviewer(unittest.TestCase):
         self.assertIn("formatting", feedback)
 
 
+class TestRunOnceWorkflow(unittest.TestCase):
+    """Tests for the run_once() orchestration workflow."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.tmpdir = tempfile.mkdtemp()
+        self.reviewer = AutoReviewer(
+            project_dir=self.tmpdir,
+            base_branch="main",
+            auto_merge=False,
+            max_iterations=3,
+            modes=["fix_bugs"]
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_lock_already_held(self, mock_release, mock_acquire, mock_create, mock_claude):
+        """Should return False immediately if lock cannot be acquired."""
+        mock_acquire.return_value = False
+
+        result = self.reviewer.run_once()
+
+        self.assertFalse(result)
+        mock_create.assert_not_called()
+        mock_claude.assert_not_called()
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_branch_creation_fails(self, mock_release, mock_acquire, mock_create, mock_claude, mock_tg):
+        """Should return False and notify if branch creation fails."""
+        mock_acquire.return_value = True
+        mock_create.return_value = False
+
+        result = self.reviewer.run_once()
+
+        self.assertFalse(result)
+        mock_claude.assert_not_called()
+        mock_tg.assert_called()  # Should send failure notification
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_claude_fails(self, mock_release, mock_acquire, mock_create, mock_claude, mock_cleanup, mock_tg):
+        """Should cleanup and return False if Claude fails."""
+        mock_acquire.return_value = True
+        mock_create.return_value = True
+        mock_claude.return_value = (False, "Claude failed")
+
+        result = self.reviewer.run_once()
+
+        self.assertFalse(result)
+        mock_cleanup.assert_called()
+        mock_tg.assert_called()
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_no_changes_made(self, mock_release, mock_acquire, mock_create, mock_claude, mock_commits, mock_cleanup, mock_tg):
+        """Should succeed and cleanup when Claude makes no changes."""
+        mock_acquire.return_value = True
+        mock_create.return_value = True
+        mock_claude.return_value = (True, "No changes needed")
+        mock_commits.return_value = False
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)
+        mock_cleanup.assert_called()
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_pr_creation_fails(self, mock_release, mock_acquire, mock_create, mock_claude, mock_commits, mock_pr, mock_cleanup, mock_tg):
+        """Should cleanup and return False if PR creation fails."""
+        mock_acquire.return_value = True
+        mock_create.return_value = True
+        mock_claude.return_value = (True, "Made changes")
+        mock_commits.return_value = True
+        mock_pr.return_value = None
+
+        result = self.reviewer.run_once()
+
+        self.assertFalse(result)
+        mock_cleanup.assert_called()
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    @patch.object(AutoReviewer, 'review_pr_with_claude')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_pr_approved_first_try(self, mock_release, mock_acquire, mock_create, mock_claude, mock_commits, mock_pr, mock_review, mock_cleanup, mock_tg):
+        """Should succeed when PR is approved on first review."""
+        mock_acquire.return_value = True
+        mock_create.return_value = True
+        mock_claude.return_value = (True, "Made changes")
+        mock_commits.return_value = True
+        mock_pr.return_value = "https://github.com/owner/repo/pull/123"
+        mock_review.return_value = (True, "APPROVED", "Looks good")
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)
+        mock_review.assert_called_once()
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    @patch.object(AutoReviewer, 'merge_pr')
+    @patch.object(AutoReviewer, 'review_pr_with_claude')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_auto_merge_on_approval(self, mock_release, mock_acquire, mock_create, mock_claude, mock_commits, mock_pr, mock_review, mock_merge, mock_cleanup, mock_tg):
+        """Should auto-merge PR when approved and auto_merge is enabled."""
+        self.reviewer.auto_merge = True
+        mock_acquire.return_value = True
+        mock_create.return_value = True
+        mock_claude.return_value = (True, "Made changes")
+        mock_commits.return_value = True
+        mock_pr.return_value = "https://github.com/owner/repo/pull/123"
+        mock_review.return_value = (True, "APPROVED", "Looks good")
+        mock_merge.return_value = True
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)
+        mock_merge.assert_called_once_with("https://github.com/owner/repo/pull/123")
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    @patch.object(AutoReviewer, 'fix_pr_feedback')
+    @patch.object(AutoReviewer, 'review_pr_with_claude')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_fix_cycle_then_approved(self, mock_release, mock_acquire, mock_create, mock_claude, mock_commits, mock_pr, mock_review, mock_fix, mock_cleanup, mock_tg):
+        """Should iterate fix cycle until approved."""
+        mock_acquire.return_value = True
+        mock_create.return_value = True
+        mock_claude.return_value = (True, "Made changes")
+        mock_commits.return_value = True
+        mock_pr.return_value = "https://github.com/owner/repo/pull/123"
+        # First review requests changes, second approves
+        mock_review.side_effect = [
+            (False, "CHANGES_REQUESTED: Fix formatting", "Fix formatting"),
+            (True, "APPROVED", "Looks good now"),
+        ]
+        mock_fix.return_value = (True, "Fixed formatting")
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)
+        self.assertEqual(mock_review.call_count, 2)
+        mock_fix.assert_called_once()
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    @patch.object(AutoReviewer, 'fix_pr_feedback')
+    @patch.object(AutoReviewer, 'review_pr_with_claude')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_max_iterations_reached(self, mock_release, mock_acquire, mock_create, mock_claude, mock_commits, mock_pr, mock_review, mock_fix, mock_cleanup, mock_tg):
+        """Should stop after max_iterations even if not approved."""
+        self.reviewer.max_iterations = 2
+        mock_acquire.return_value = True
+        mock_create.return_value = True
+        mock_claude.return_value = (True, "Made changes")
+        mock_commits.return_value = True
+        mock_pr.return_value = "https://github.com/owner/repo/pull/123"
+        # Always request changes
+        mock_review.return_value = (False, "CHANGES_REQUESTED: Still not right", "Fix it")
+        mock_fix.return_value = (True, "Tried to fix")
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)  # Still returns True (cycle completed)
+        self.assertEqual(mock_review.call_count, 2)
+        self.assertEqual(mock_fix.call_count, 2)
+
+    @patch.object(TelegramNotifier, 'send')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    @patch.object(AutoReviewer, 'fix_pr_feedback')
+    @patch.object(AutoReviewer, 'review_pr_with_claude')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(LockFile, 'release')
+    def test_run_once_fix_fails(self, mock_release, mock_acquire, mock_create, mock_claude, mock_commits, mock_pr, mock_review, mock_fix, mock_cleanup, mock_tg):
+        """Should break loop if fix fails."""
+        mock_acquire.return_value = True
+        mock_create.return_value = True
+        mock_claude.return_value = (True, "Made changes")
+        mock_commits.return_value = True
+        mock_pr.return_value = "https://github.com/owner/repo/pull/123"
+        mock_review.return_value = (False, "CHANGES_REQUESTED", "Fix it")
+        mock_fix.return_value = (False, "Fix failed")
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)  # Cycle completed even though fix failed
+        mock_fix.assert_called_once()
+        # Should notify about fixer failure
+        self.assertTrue(any("Fixer Failed" in str(call) for call in mock_tg.call_args_list))
+
+
 if __name__ == "__main__":
     unittest.main()
