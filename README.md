@@ -270,6 +270,70 @@ The thinking keywords are Claude Code magic words that trigger extended reasonin
 
 ---
 
+## Concurrent Workers
+
+Run multiple Claudes in parallel, each working on a different directory. No race conditions - isolation by design.
+
+```bash
+# Download the concurrent version
+curl -O https://raw.githubusercontent.com/friday-james/let-claude-code/main/claude_automator_concurrent.py
+chmod +x claude_automator_concurrent.py
+
+# Auto-partition: each directory gets its own Claude
+./claude_automator_concurrent.py --auto-partition -p "Fix bugs"
+
+# Specific directories
+./claude_automator_concurrent.py -d src scripts strategies -p "Add type hints"
+
+# True parallelism with git worktrees
+./claude_automator_concurrent.py --auto-partition --parallel
+```
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│   YOU RUN:  ./claude_automator_concurrent.py --auto      │
+│                                                          │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
+│   │  CLAUDE 1   │  │  CLAUDE 2   │  │  CLAUDE 3   │     │
+│   │   src/      │  │  scripts/   │  │  tests/     │     │
+│   │  (branch 1) │  │  (branch 2) │  │  (branch 3) │     │
+│   └─────────────┘  └─────────────┘  └─────────────┘     │
+│         │                │                │              │
+│         ▼                ▼                ▼              │
+│   ┌─────────────────────────────────────────────────┐   │
+│   │              3 BRANCHES, 3 PRs                  │   │
+│   │         No conflicts. No race conditions.       │   │
+│   └─────────────────────────────────────────────────┘   │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Config file for different tasks per directory:**
+
+```json
+[
+    {"directory": "src", "prompt": "Fix bugs in the core modules"},
+    {"directory": "scripts", "prompt": "Add type hints to all functions"},
+    {"directory": "tests", "prompt": "Improve test coverage"}
+]
+```
+
+```bash
+./claude_automator_concurrent.py --config workers.json
+```
+
+| Option | What it does |
+|:-------|:-------------|
+| `-a, --auto-partition` | Auto-detect directories |
+| `-d, --directories` | Specific directories to work on |
+| `-p, --prompt` | Prompt for all workers |
+| `-c, --config` | JSON config file |
+| `--parallel` | Use git worktrees for true parallelism |
+| `--dry-run` | Preview without executing |
+
+---
+
 ## Requirements
 
 - **Python 3.10+** (zero dependencies)
