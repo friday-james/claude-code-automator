@@ -272,38 +272,42 @@ The thinking keywords are Claude Code magic words that trigger extended reasonin
 
 ## Concurrent Workers
 
-Run multiple Claudes in parallel, each working on a different directory. No race conditions - isolation by design.
+Run multiple Claudes in parallel, each on its own branch. Each worker runs the **full cycle** (improve → PR → review → fix → merge) scoped to a directory.
 
 ```bash
-# Download the concurrent version
+# Download both files
+curl -O https://raw.githubusercontent.com/friday-james/let-claude-code/main/claude_automator.py
 curl -O https://raw.githubusercontent.com/friday-james/let-claude-code/main/claude_automator_concurrent.py
-chmod +x claude_automator_concurrent.py
+chmod +x claude_automator*.py
 
-# Auto-partition: each directory gets its own Claude
-./claude_automator_concurrent.py --auto-partition -p "Fix bugs"
+# Run on specific directories
+./claude_automator_concurrent.py -d src lib scripts -p "Fix bugs"
 
-# Specific directories
-./claude_automator_concurrent.py -d src scripts strategies -p "Add type hints"
+# Auto-merge when approved
+./claude_automator_concurrent.py -d src lib --auto-merge
 
-# True parallelism with git worktrees
-./claude_automator_concurrent.py --auto-partition --parallel
+# With extended thinking
+./claude_automator_concurrent.py -d src -m security --think ultrathink
 ```
 
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                                                          │
-│   YOU RUN:  ./claude_automator_concurrent.py --auto      │
+│   YOU RUN:  ./claude_automator_concurrent.py -d src lib  │
 │                                                          │
-│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
-│   │  CLAUDE 1   │  │  CLAUDE 2   │  │  CLAUDE 3   │     │
-│   │   src/      │  │  scripts/   │  │  tests/     │     │
-│   │  (branch 1) │  │  (branch 2) │  │  (branch 3) │     │
-│   └─────────────┘  └─────────────┘  └─────────────┘     │
-│         │                │                │              │
-│         ▼                ▼                ▼              │
+│   Worker 1 (src/)              Worker 2 (lib/)           │
+│   ┌────────────────┐           ┌────────────────┐        │
+│   │ Branch         │           │ Branch         │        │
+│   │ Improve        │           │ Improve        │        │
+│   │ Create PR      │           │ Create PR      │        │
+│   │ Review         │           │ Review         │        │
+│   │ Fix feedback   │           │ Fix feedback   │        │
+│   │ Merge          │           │ Merge          │        │
+│   └────────────────┘           └────────────────┘        │
+│          ↓                            ↓                  │
 │   ┌─────────────────────────────────────────────────┐   │
-│   │              3 BRANCHES, 3 PRs                  │   │
-│   │         No conflicts. No race conditions.       │   │
+│   │     2 PRs created, reviewed, and merged         │   │
+│   │        Each scoped to its own directory         │   │
 │   └─────────────────────────────────────────────────┘   │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
@@ -314,22 +318,23 @@ chmod +x claude_automator_concurrent.py
 ```json
 [
     {"directory": "src", "prompt": "Fix bugs in the core modules"},
-    {"directory": "scripts", "prompt": "Add type hints to all functions"},
-    {"directory": "tests", "prompt": "Improve test coverage"}
+    {"directory": "lib", "modes": ["security", "fix_bugs"]},
+    {"directory": "scripts", "prompt": "Add type hints"}
 ]
 ```
 
 ```bash
-./claude_automator_concurrent.py --config workers.json
+./claude_automator_concurrent.py -c workers.json --auto-merge
 ```
 
 | Option | What it does |
 |:-------|:-------------|
-| `-a, --auto-partition` | Auto-detect directories |
-| `-d, --directories` | Specific directories to work on |
+| `-d, --directories` | Directories to work on |
 | `-p, --prompt` | Prompt for all workers |
+| `-m, --mode` | Improvement mode (repeatable) |
 | `-c, --config` | JSON config file |
-| `--parallel` | Use git worktrees for true parallelism |
+| `--auto-merge` | Auto-merge approved PRs |
+| `--think LEVEL` | Thinking budget |
 | `--dry-run` | Preview without executing |
 
 ---
