@@ -907,6 +907,7 @@ class AutoReviewer:
 
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
         """Run Claude CLI with the given prompt, streaming output in real-time with usage stats."""
+        import atexit
         import tempfile
         import json
 
@@ -914,11 +915,25 @@ class AutoReviewer:
         if self.think_level != "normal":
             prompt = f"{prompt}\n\n{self.think_level}"
 
+        prompt_file = None
+
+        def cleanup_temp_file() -> None:
+            """Cleanup temp file on exit - registered with atexit for safety."""
+            if prompt_file and os.path.exists(prompt_file):
+                try:
+                    os.unlink(prompt_file)
+                except OSError:
+                    pass
+
         try:
             # Write prompt to a temp file to avoid command line length limits
             with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
                 f.write(prompt)
                 prompt_file = f.name
+
+            # Register cleanup with atexit in case of abnormal exit (SIGTERM, etc.)
+            # Note: SIGKILL cannot be caught, but this handles most other cases
+            atexit.register(cleanup_temp_file)
 
             try:
                 # Build command - use -c to continue session if available
@@ -952,6 +967,8 @@ class AutoReviewer:
                     if not line:
                         if process.poll() is not None:
                             break
+                        # Small sleep to avoid busy-waiting when no output available
+                        time.sleep(0.01)
                         continue
 
                     line = line.strip()
@@ -1021,7 +1038,10 @@ class AutoReviewer:
 
                 return success, summary
             finally:
-                os.unlink(prompt_file)
+                # Clean up temp file and unregister atexit handler
+                if prompt_file and os.path.exists(prompt_file):
+                    os.unlink(prompt_file)
+                atexit.unregister(cleanup_temp_file)
 
         except FileNotFoundError:
             return False, "Claude CLI not found"
