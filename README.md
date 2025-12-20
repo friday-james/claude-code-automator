@@ -238,6 +238,35 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `--base-branch NAME` | Base branch for PRs (default: `main`) |
 | `--auto-merge` | Auto-merge approved PRs |
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
+| `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
+
+---
+
+## Extended Thinking
+
+Use `--think` to give Claude more thinking time for complex tasks:
+
+```bash
+./claude_automator.py --loop --think ultrathink    # Maximum thinking budget
+./claude_automator.py --loop --think megathink     # 10,000 token budget
+./claude_automator.py --loop --think think         # 4,000 token budget
+./claude_automator.py --loop                       # Normal (default)
+```
+
+| Level | Budget | Best For |
+|:------|:-------|:---------|
+| `normal` | Default | Routine improvements |
+| `think` | 4,000 tokens | Moderate complexity |
+| `megathink` | 10,000 tokens | Complex refactoring |
+| `ultrathink` | Maximum | Architectural decisions, deep analysis |
+
+**When to use `--think ultrathink`:**
+- Complex architectural decisions
+- Performance optimization challenges
+- Security vulnerability analysis
+- Large-scale refactoring
+
+The thinking keywords are Claude Code magic words that trigger extended reasoning. Reserve higher levels for tasks where thorough analysis justifies the additional compute cost.
 
 ---
 

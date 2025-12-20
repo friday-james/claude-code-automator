@@ -855,6 +855,7 @@ class AutoReviewer:
         tg_chat_id: str | None = None,
         review_prompt: str | None = None,
         modes: list[str] | None = None,
+        think_level: str = "normal",
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
@@ -868,6 +869,7 @@ class AutoReviewer:
         self.review_prompt = review_prompt or get_combined_prompt(self.modes)
         self.session_cost = 0.0  # Cumulative cost across all runs
         self.session_id: str | None = None  # For continuing sessions
+        self.think_level = think_level  # Thinking budget: normal, think, megathink, ultrathink
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -907,6 +909,10 @@ class AutoReviewer:
         """Run Claude CLI with the given prompt, streaming output in real-time with usage stats."""
         import tempfile
         import json
+
+        # Append thinking keyword if not normal
+        if self.think_level != "normal":
+            prompt = f"{prompt}\n\n{self.think_level}"
 
         try:
             # Write prompt to a temp file to avoid command line length limits
@@ -960,8 +966,17 @@ class AutoReviewer:
                         if msg_type == "assistant" and "message" in data:
                             content = data["message"].get("content", [])
                             for block in content:
-                                if block.get("type") == "text":
+                                block_type = block.get("type")
+                                if block_type == "text":
                                     print(block.get("text", ""), end="", flush=True)
+                                elif block_type == "thinking":
+                                    # Print thinking content with visual distinction
+                                    thinking_text = block.get("thinking", "")
+                                    if thinking_text:
+                                        print("\n\033[2m--- Thinking ---\033[0m", flush=True)
+                                        for thought_line in thinking_text.split('\n'):
+                                            print(f"\033[2m{thought_line}\033[0m", flush=True)
+                                        print("\033[2m--- End Thinking ---\033[0m\n", flush=True)
 
                         # Capture final result with usage
                         if msg_type == "result":
@@ -1212,6 +1227,8 @@ def main():
     parser.add_argument("--tg-bot-token", type=str, default=os.environ.get("TG_BOT_TOKEN"))
     parser.add_argument("--tg-chat-id", type=str, default=os.environ.get("TG_CHAT_ID"))
     parser.add_argument("--prompt-file", type=str, help="Custom prompt file")
+    parser.add_argument("--think", type=str, choices=["normal", "think", "megathink", "ultrathink"],
+                        default="normal", help="Thinking budget level (default: normal)")
 
     args = parser.parse_args()
 
@@ -1301,6 +1318,8 @@ def main():
         print("Mode: North Star")
     else:
         print(f"Modes: {', '.join(IMPROVEMENT_MODES[m]['name'] for m in selected_modes if m in IMPROVEMENT_MODES)}")
+    if args.think != "normal":
+        print(f"Thinking: {args.think}")
     print("=" * 60 + "\n")
 
     reviewer = AutoReviewer(
@@ -1311,7 +1330,8 @@ def main():
         tg_chat_id=args.tg_chat_id,
         max_iterations=args.max_iterations,
         review_prompt=review_prompt,
-        modes=selected_modes
+        modes=selected_modes,
+        think_level=args.think,
     )
 
     if args.once:
