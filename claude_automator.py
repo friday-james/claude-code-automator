@@ -672,6 +672,12 @@ def validate_positive_int(value: int, name: str, max_value: int | None = None) -
 # ============================================================================
 
 def get_mode_list() -> str:
+    """Generate a formatted list of all available improvement modes.
+
+    Returns:
+        A multi-line string listing all modes with their descriptions,
+        formatted for CLI display.
+    """
     lines = ["\nAvailable improvement modes:\n"]
     for key, mode in IMPROVEMENT_MODES.items():
         lines.append(f"  {key:20} - {mode['description']}")
@@ -682,6 +688,15 @@ def get_mode_list() -> str:
 
 
 def create_default_northstar(project_dir: Path) -> tuple[bool, str]:
+    """Create a default NORTHSTAR.md template in the project directory.
+
+    Args:
+        project_dir: The directory where NORTHSTAR.md should be created.
+
+    Returns:
+        A tuple of (success, message) where success is True if the file
+        was created, False if it already exists or an error occurred.
+    """
     northstar_path = project_dir / "NORTHSTAR.md"
     if northstar_path.exists():
         return False, f"NORTHSTAR.md already exists at {northstar_path}"
@@ -693,6 +708,15 @@ def create_default_northstar(project_dir: Path) -> tuple[bool, str]:
 
 
 def load_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
+    """Load NORTHSTAR.md and generate a prompt from its contents.
+
+    Args:
+        project_dir: The directory containing NORTHSTAR.md.
+
+    Returns:
+        A tuple of (prompt, error) where prompt is the generated prompt
+        string if successful, or None with an error message if not.
+    """
     northstar_path = project_dir / "NORTHSTAR.md"
     if not northstar_path.exists():
         return None, f"NORTHSTAR.md not found in {project_dir}"
@@ -706,6 +730,14 @@ def load_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
 
 
 def select_modes_interactive() -> list[str]:
+    """Interactively prompt the user to select improvement modes.
+
+    Displays a numbered list of available modes and accepts user input
+    to select one or more modes. Supports selecting all modes or quitting.
+
+    Returns:
+        A list of selected mode keys, or an empty list if cancelled.
+    """
     print("\n" + "=" * 60)
     print("Select improvement modes to run")
     print("=" * 60 + "\n")
@@ -1223,7 +1255,16 @@ def run_loop(reviewer: AutoReviewer) -> None:
         print(f"\nRun #{run_count} complete. Starting next run immediately...")
 
 
-def run_with_interval(reviewer: AutoReviewer, interval: int):
+def run_with_interval(reviewer: AutoReviewer, interval: int) -> None:
+    """Run the reviewer on a fixed interval schedule.
+
+    Executes review cycles at regular intervals. If a cycle takes longer
+    than the interval, the next run starts immediately with no wait.
+
+    Args:
+        reviewer: The AutoReviewer instance to run.
+        interval: Seconds between the start of each run.
+    """
     print(f"Running every {interval}s. Press Ctrl+C to stop.")
     while True:
         start = time.time()
@@ -1234,7 +1275,19 @@ def run_with_interval(reviewer: AutoReviewer, interval: int):
             time.sleep(sleep_time)
 
 
-def run_with_cron(reviewer: AutoReviewer, cron_expr: str):
+def run_with_cron(reviewer: AutoReviewer, cron_expr: str) -> None:
+    """Run the reviewer on a cron schedule.
+
+    Executes review cycles according to a cron expression. Requires the
+    croniter package to be installed.
+
+    Args:
+        reviewer: The AutoReviewer instance to run.
+        cron_expr: A 5-field cron expression (minute hour day month weekday).
+
+    Raises:
+        SystemExit: If croniter is not installed.
+    """
     if not HAS_CRONITER:
         print("Error: pip install croniter")
         sys.exit(1)
