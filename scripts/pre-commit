@@ -1,0 +1,20 @@
+#!/bin/bash
+# Pre-commit hook - runs lint and tests before commit
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Lint
+echo "→ Running ruff check..."
+ruff check src/let_claude_code/ test_claude_automator.py
+
+# Syntax check
+echo "→ Checking syntax..."
+python -m py_compile src/let_claude_code/automator.py src/let_claude_code/concurrent.py
+
+# Tests
+echo "→ Running tests..."
+python -m pytest test_claude_automator.py -q
+
+echo "✓ All checks passed!"
