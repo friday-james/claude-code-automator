@@ -14,14 +14,14 @@ You: *reviews the changes*
 ## Install
 
 ```bash
-# From PyPI (when published)
-pip install let-claude-code
-
-# From GitHub
+# One-liner
 pip install git+https://github.com/friday-james/let-claude-code.git
 
+# Or with wget
+wget -qO- https://raw.githubusercontent.com/friday-james/let-claude-code/main/install.sh | bash
+
 # For cron support
-pip install let-claude-code[cron]
+pip install "let-claude-code[cron] @ git+https://github.com/friday-james/let-claude-code.git"
 ```
 
 This installs the `cook` command.
