@@ -17,7 +17,7 @@ Usage:
 
     # Same options as main script
     ./claude_automator_concurrent.py -d src -p "Fix bugs" --think ultrathink --auto-merge
-    ./claude_automator_concurrent.py -d src --codex --think ultrathink
+    ./claude_automator_concurrent.py -d src --llm codex --think ultrathink
 
 Example workers.json:
 [
@@ -398,8 +398,6 @@ def main():
                         default="normal", help="Thinking level")
     parser.add_argument("--llm", type=str, choices=["claude", "codex"], default="claude",
                         help="LLM CLI to use (default: claude)")
-    parser.add_argument("--codex", action="store_true",
-                        help="Use Codex CLI (shorthand for --llm codex)")
     parser.add_argument("--create-pr", nargs="?", const="main", metavar="BRANCH",
                         help="Create PR targeting BRANCH (default: main)")
     parser.add_argument("-y", "--yes", action="store_true",
@@ -418,9 +416,6 @@ def main():
                         help="Show what would be done")
 
     args = parser.parse_args()
-
-    if args.codex:
-        args.llm = "codex"
 
     # Use current directory as project path
     project_dir = Path(os.getcwd()).resolve()

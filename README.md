@@ -290,7 +290,6 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
 | `--llm PROVIDER` | LLM CLI to use: `claude` or `codex` |
-| `--codex` | Use Codex CLI (same as `--llm codex`) |
 
 ---
 
@@ -329,7 +328,7 @@ cook-concurrent -d src lib --create-pr --auto-merge
 cook-concurrent -d src -m security --think ultrathink
 
 # Use Codex CLI
-cook-concurrent -d src --codex
+cook-concurrent -d src --llm codex
 ```
 
 ```

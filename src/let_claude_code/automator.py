@@ -7,7 +7,7 @@ Zero dependencies beyond Python 3.10+ stdlib. Just download and run.
 Usage:
     ./claude_automator.py --once -m improve_code    # Improve code quality
     ./claude_automator.py --once --northstar        # Iterate towards NORTHSTAR.md goals
-    ./claude_automator.py --once --codex -m fix_bugs  # Run with Codex CLI
+    ./claude_automator.py --once --llm codex -m fix_bugs  # Run with Codex CLI
     ./claude_automator.py --list-modes              # Show available modes
 """
 
@@ -912,75 +912,78 @@ class AutoReviewer:
 
     def run_codex(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
         """Run Codex CLI with the given prompt, streaming output in real-time."""
-        import atexit
-        import tempfile
+        import pty
+        import select
 
         # Append thinking keyword if not normal
         if self.think_level != "normal":
             prompt = f"{prompt}\n\n{self.think_level}"
 
-        prompt_file = None
-
-        def cleanup_temp_file() -> None:
-            """Cleanup temp file on exit - registered with atexit for safety."""
-            if prompt_file and os.path.exists(prompt_file):
-                try:
-                    os.unlink(prompt_file)
-                except OSError:
-                    pass
-
         try:
-            # Write prompt to a temp file to avoid command line length limits
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
-                f.write(prompt)
-                prompt_file = f.name
+            # Create pseudo-terminal so codex thinks it has a TTY
+            master_fd, slave_fd = pty.openpty()
 
-            atexit.register(cleanup_temp_file)
+            process = subprocess.Popen(
+                ["codex"],
+                cwd=self.project_dir,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+            )
 
-            try:
-                cmd = ["codex"]
+            os.close(slave_fd)
 
-                process = subprocess.Popen(
-                    cmd,
-                    cwd=self.project_dir,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                )
+            # Send prompt
+            os.write(master_fd, (prompt + "\n").encode())
 
-                process.stdin.write(prompt)
-                process.stdin.close()
+            start_time = time.time()
+            output_lines = []
 
-                start_time = time.time()
+            while True:
+                if time.time() - start_time > timeout:
+                    process.kill()
+                    os.close(master_fd)
+                    return False, "Codex timed out"
 
-                while True:
-                    if time.time() - start_time > timeout:
-                        process.kill()
-                        return False, "Codex timed out"
+                # Check if there's data to read
+                ready, _, _ = select.select([master_fd], [], [], 0.1)
+                if ready:
+                    try:
+                        data = os.read(master_fd, 1024)
+                        if data:
+                            text = data.decode('utf-8', errors='replace')
+                            print(text, end="", flush=True)
+                            output_lines.append(text)
+                    except OSError:
+                        break
 
-                    line = process.stdout.readline()
-                    if not line:
-                        if process.poll() is not None:
-                            break
-                        time.sleep(0.01)
-                        continue
+                if process.poll() is not None:
+                    # Read any remaining output
+                    try:
+                        while True:
+                            ready, _, _ = select.select([master_fd], [], [], 0.1)
+                            if not ready:
+                                break
+                            data = os.read(master_fd, 1024)
+                            if not data:
+                                break
+                            text = data.decode('utf-8', errors='replace')
+                            print(text, end="", flush=True)
+                            output_lines.append(text)
+                    except OSError:
+                        pass
+                    break
 
-                    print(line, end="", flush=True)
+            os.close(master_fd)
+            success = process.returncode == 0
 
-                success = process.returncode == 0
+            if success:
+                _, log_output = self.run_cmd(["git", "log", "--oneline", f"{self.base_branch}..HEAD"])
+                summary = f"Changes made:\n{log_output}" if log_output.strip() else "Codex completed"
+            else:
+                summary = "Codex failed"
 
-                if success:
-                    _, log_output = self.run_cmd(["git", "log", "--oneline", f"{self.base_branch}..HEAD"])
-                    summary = f"Changes made:\n{log_output}" if log_output.strip() else "Codex completed"
-                else:
-                    summary = "Codex failed"
-
-                return success, summary
-            finally:
-                if prompt_file and os.path.exists(prompt_file):
-                    os.unlink(prompt_file)
-                atexit.unregister(cleanup_temp_file)
+            return success, summary
 
         except FileNotFoundError:
             return False, "Codex CLI not found"
@@ -1355,17 +1358,12 @@ def main():
                         default="normal", help="Thinking budget level (default: normal)")
     parser.add_argument("--llm", type=str, choices=["claude", "codex"], default="claude",
                         help="LLM CLI to use (default: claude)")
-    parser.add_argument("--codex", action="store_true",
-                        help="Use Codex CLI (shorthand for --llm codex)")
     parser.add_argument("--create-pr", nargs="?", const="main", metavar="BRANCH",
                         help="Create PR targeting BRANCH (default: main)")
     parser.add_argument("-y", "--yes", action="store_true",
                         help="Skip confirmation prompt")
 
     args = parser.parse_args()
-
-    if args.codex:
-        args.llm = "codex"
 
     if args.list_modes:
         print(get_mode_list())
