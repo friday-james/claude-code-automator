@@ -1018,6 +1018,7 @@ class AutoReviewer:
         self.work_branch = work_branch  # If set, checkout to this branch before working
         self.claude_flags = claude_flags  # Additional flags to pass to Claude CLI
         self.sessions_file = self.project_dir / ".cook_sessions.json"
+        self.use_gemini = False  # Enable auto-answering Claude questions via Gemini
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -1136,6 +1137,117 @@ class AutoReviewer:
         print("Invalid choice.")
         return None
 
+    # ============================================================================
+    # GEMINI INTEGRATION - Auto-answer Claude questions
+    # ============================================================================
+
+    def ask_gemini(self, question: str, context: str = "") -> str | None:
+        """Send a question to Gemini and get an answer."""
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return None
+
+        try:
+            import urllib.request
+            import urllib.error
+
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+
+            prompt = f"""You are helping an AI coding assistant (Claude) answer a question.
+
+Context about the project/codebase:
+{context if context else "General question - use your knowledge"}
+
+Question from Claude:
+{question}
+
+Provide a clear, direct answer that Claude can use. Be concise but thorough."""
+
+            data = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": 1024,
+                }
+            }
+
+            import json
+            data_str = json.dumps(data).encode('utf-8')
+
+            req = urllib.request.Request(
+                url,
+                data=data_str,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as response:
+                result = json.loads(response.read().decode('utf-8'))
+
+                if result.get("candidates"):
+                    return result["candidates"][0]["content"]["parts"][0]["text"]
+
+        except Exception as e:
+            self.log(f"Gemini API error: {e}")
+
+        return None
+
+    def detect_question(self, text: str) -> bool:
+        """Detect if text contains a question Claude is asking the user."""
+        if not text:
+            return False
+
+        text = text.strip()
+
+        # Claude asking for user input typically has these patterns:
+        # 1. Ends with "?" (direct question)
+        # 2. Contains question words with specific phrases
+        # 3. Has patterns like "Would you like me to", "Should I", etc.
+
+        if text.endswith("?"):
+            return True
+
+        # Check for common Claude input request patterns
+        question_patterns = [
+            r"what would you like me to",
+            r"how should i proceed",
+            r"would you like me to",
+            r"should i continue",
+            r"do you want me to",
+            r"let me know what",
+            r"please tell me",
+            r"what would you like",
+            r"should i make the changes",
+            r"would you like to proceed",
+            r"is this okay",
+            r"is this correct",
+            r"does this look right",
+            r"are you happy with",
+        ]
+
+        for pattern in question_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+
+        return False
+
+    def extract_question(self, text: str) -> str:
+        """Extract the main question from Claude's output."""
+        # Get the last line that seems like a question
+        lines = text.strip().split('\n')
+        for line in reversed(lines):
+            line = line.strip()
+            if line and (line.endswith('?') or self.detect_question(line)):
+                return line
+
+        # If no clear question, return the last non-empty line
+        for line in reversed(lines):
+            line = line.strip()
+            if line:
+                return line
+
+        return text[:200]
+
     def log(self, msg: str) -> None:
         """Log a message to stdout and the log file with timestamp."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1220,7 +1332,10 @@ class AutoReviewer:
 
                 # Send prompt via stdin
                 process.stdin.write(prompt)
-                process.stdin.close()
+                process.stdin.flush()
+
+                # Track accumulated text for question detection
+                accumulated_text = ""
 
                 result_data = {}
                 start_time = time.time()
@@ -1246,13 +1361,39 @@ class AutoReviewer:
                         data = json.loads(line)
                         msg_type = data.get("type", "")
 
+                        # Handle user input requests from Claude
+                        if msg_type == "input_required" and self.use_gemini:
+                            question_text = data.get("message", {}).get("text", "") or data.get("description", "")
+                            accumulated_text += question_text + "\n"
+
+                            print(f"\n\033[93m🤖 Claude asking: {question_text[:100]}...\033[0m")
+                            self.telegram.send(f"🤖 *Claude is asking:*\n\n_{question_text[:200]}_")
+
+                            # Ask Gemini
+                            answer = self.ask_gemini(question_text, f"Project: {self.project_dir}")
+                            if answer:
+                                print(f"\n\033[92m✨ Gemini answered: {answer[:200]}...\033[0m")
+                                self.telegram.send(f"✨ *Gemini auto-answered:*\n\n_{answer[:300]}_")
+                                # Send answer to Claude
+                                process.stdin.write(answer + "\n")
+                                process.stdin.flush()
+                            else:
+                                # Gemini failed, ask user manually
+                                print("\n\033[91mGemini not available, please answer manually:\033[0m")
+                                self.telegram.send("⚠️ *Gemini failed, waiting for user input...*")
+                                user_input = input("> ")
+                                process.stdin.write(user_input + "\n")
+                                process.stdin.flush()
+
                         # Print assistant messages in real-time
                         if msg_type == "assistant" and "message" in data:
                             content = data["message"].get("content", [])
                             for block in content:
                                 block_type = block.get("type")
                                 if block_type == "text":
-                                    print(block.get("text", ""), end="", flush=True)
+                                    text = block.get("text", "")
+                                    print(text, end="", flush=True)
+                                    accumulated_text += text
                                 elif block_type == "thinking":
                                     # Print thinking content with visual distinction
                                     thinking_text = block.get("thinking", "")
@@ -1297,6 +1438,13 @@ class AutoReviewer:
                     print(f"⏱️  Time: {duration:.1f}s")
                     print("💡 Check quota: run 'claude' then type '/usage'")
                     print(f"{'─'*60}\n")
+
+                # Close stdin if still open (after potential gemini answers)
+                try:
+                    if not process.stdin.closed:
+                        process.stdin.close()
+                except OSError:
+                    pass
 
                 # Get summary from git log
                 if success:
@@ -1576,6 +1724,8 @@ def main():
                         help="Show session selection menu to resume a previous session")
     parser.add_argument("--clear-sessions", action="store_true",
                         help="Clear all saved sessions and exit")
+    parser.add_argument("--auto-gemini-answer", action="store_true",
+                        help="Auto-answer Claude's questions using Gemini (requires GEMINI_API_KEY env var)")
 
     args = parser.parse_args()
 
@@ -1705,6 +1855,29 @@ def main():
             print("\nProceeding anyway (--yes flag set)")
             print("Note: Claude may prompt for permissions during execution.\n")
 
+    # Check for Gemini API key if --auto-gemini-answer is requested
+    use_gemini = False
+    if args.auto_gemini_answer:
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if not gemini_key:
+            print("\n" + "=" * 60)
+            print("🤖 Gemini Auto-Answer requested")
+            print("=" * 60)
+            print("To use --auto-gemini-answer, you need a Gemini API key.")
+            print("Get one from: https://aistudio.google.com/app/apikey")
+            try:
+                gemini_key = input("\nEnter your Gemini API key (or press Enter to skip): ").strip()
+                if gemini_key:
+                    os.environ["GEMINI_API_KEY"] = gemini_key
+                    use_gemini = True
+                else:
+                    print("Skipping Gemini auto-answer.")
+            except (EOFError, KeyboardInterrupt):
+                print("\nSkipping Gemini auto-answer.")
+        else:
+            use_gemini = True
+            print("✓ Gemini API key found")
+
     # Get current branch name
     try:
         result = subprocess.run(
@@ -1787,6 +1960,10 @@ def main():
         work_branch=args.branch,
         claude_flags=args.claude,
     )
+
+    # Enable Gemini auto-answer if requested
+    if use_gemini:
+        reviewer.use_gemini = True
 
     # If resuming a session, set the session_id
     if resume_session_id:
