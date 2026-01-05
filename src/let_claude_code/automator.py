@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import json
 import os
 import random
 import re
@@ -1016,11 +1017,124 @@ class AutoReviewer:
         self.create_pr = create_pr  # If True, create PR with review cycle
         self.work_branch = work_branch  # If set, checkout to this branch before working
         self.claude_flags = claude_flags  # Additional flags to pass to Claude CLI
+        self.sessions_file = self.project_dir / ".cook_sessions.json"
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
         names = [IMPROVEMENT_MODES[m]["name"] for m in self.modes if m in IMPROVEMENT_MODES]
         return ", ".join(names) if names else "Unknown"
+
+    # ============================================================================
+    # SESSION MANAGEMENT
+    # ============================================================================
+
+    def load_sessions(self) -> list[dict]:
+        """Load saved sessions from file."""
+        if not self.sessions_file.exists():
+            return []
+        try:
+            with open(self.sessions_file) as f:
+                data = json.load(f)
+                return data.get("sessions", [])
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def save_session(self, session_id: str, prompt: str, cost: float = 0.0) -> None:
+        """Save a session to the sessions file."""
+        sessions = self.load_sessions()
+
+        # Remove if already exists
+        sessions = [s for s in sessions if s.get("id") != session_id]
+
+        # Create new session record
+        session = {
+            "id": session_id,
+            "prompt_preview": prompt[:200].replace("\n", " ") + ("..." if len(prompt) > 200 else ""),
+            "created_at": datetime.now().isoformat(),
+            "cost": cost,
+        }
+        sessions.insert(0, session)  # Most recent first
+
+        # Keep only last 10 sessions
+        sessions = sessions[:10]
+
+        try:
+            with open(self.sessions_file, 'w') as f:
+                json.dump({"sessions": sessions, "last_updated": datetime.now().isoformat()}, f, indent=2)
+        except OSError as e:
+            self.log(f"Warning: Failed to save session: {e}")
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session from the sessions file."""
+        sessions = self.load_sessions()
+        original_count = len(sessions)
+        sessions = [s for s in sessions if s.get("id") != session_id]
+
+        if len(sessions) < original_count:
+            try:
+                with open(self.sessions_file, 'w') as f:
+                    json.dump({"sessions": sessions, "last_updated": datetime.now().isoformat()}, f, indent=2)
+                return True
+            except OSError as e:
+                self.log(f"Warning: Failed to delete session: {e}")
+        return False
+
+    def clear_all_sessions(self) -> bool:
+        """Clear all saved sessions."""
+        try:
+            if self.sessions_file.exists():
+                self.sessions_file.unlink()
+            return True
+        except OSError as e:
+            self.log(f"Warning: Failed to clear sessions: {e}")
+            return False
+
+    def select_session(self) -> str | None:
+        """Show session selection menu and return selected session ID."""
+        sessions = self.load_sessions()
+
+        if not sessions:
+            print("\nNo saved sessions found.")
+            return None
+
+        print("\n" + "=" * 60)
+        print("Select a session to resume")
+        print("=" * 60)
+
+        for i, session in enumerate(sessions, 1):
+            created = session.get("created_at", "")[:19].replace("T", " ")
+            prompt = session.get("prompt_preview", "Unknown")
+            session_id = session.get("id", "")[:12]
+            print(f"  [{i}] {created} | {session_id}... | {prompt[:40]}...")
+
+        print("\n  [n] New session (start fresh)")
+        print("  [c] Clear all sessions")
+        print("  [q] Quit")
+        print("\nEnter number to resume, or 'n'/'c'/'q':")
+
+        try:
+            choice = input("> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+        if choice == 'q' or choice == '':
+            return None
+        elif choice == 'n':
+            return None
+        elif choice == 'c':
+            if self.clear_all_sessions():
+                print("All sessions cleared.")
+            return None
+
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(sessions):
+                return sessions[idx].get("id")
+        except ValueError:
+            pass
+
+        print("Invalid choice.")
+        return None
 
     def log(self, msg: str) -> None:
         """Log a message to stdout and the log file with timestamp."""
@@ -1159,6 +1273,8 @@ class AutoReviewer:
                     # Save session_id for continuing future runs
                     if "session_id" in result_data:
                         self.session_id = result_data["session_id"]
+                        # Also save to sessions file for persistence across restarts
+                        self.save_session(self.session_id, prompt, result_data.get("total_cost_usd", 0))
 
                     run_cost = result_data.get("total_cost_usd", 0)
                     self.session_cost += run_cost
@@ -1452,6 +1568,10 @@ def main():
                         help="YOLO mode: --loop --create-pr --auto-merge -y combined")
     parser.add_argument("--claude", type=str,
                         help="Additional flags to pass to Claude CLI (space-separated)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Show session selection menu to resume a previous session")
+    parser.add_argument("--clear-sessions", action="store_true",
+                        help="Clear all saved sessions and exit")
 
     args = parser.parse_args()
 
@@ -1626,6 +1746,27 @@ def main():
         print(f"Thinking: {args.think}")
     if args.create_pr:
         print(f"PR: Enabled → merge to {args.create_pr}")
+
+    # Handle --clear-sessions first
+    if args.clear_sessions:
+        # Create temp reviewer just to access session methods
+        temp_reviewer = AutoReviewer(project_dir=project_path)
+        if temp_reviewer.clear_all_sessions():
+            print("All sessions cleared.")
+        else:
+            print("Failed to clear sessions.")
+        sys.exit(0)
+
+    # Handle --resume: show session selection menu
+    resume_session_id = None
+    if args.resume:
+        temp_reviewer = AutoReviewer(project_dir=project_path)
+        resume_session_id = temp_reviewer.select_session()
+        if resume_session_id is None:
+            print("No session selected. Exiting.")
+            sys.exit(0)
+        print(f"\nResuming session: {resume_session_id[:12]}...")
+
     print("=" * 60 + "\n")
 
     reviewer = AutoReviewer(
@@ -1642,6 +1783,10 @@ def main():
         work_branch=args.branch,
         claude_flags=args.claude,
     )
+
+    # If resuming a session, set the session_id
+    if resume_session_id:
+        reviewer.session_id = resume_session_id
 
     if args.once:
         sys.exit(0 if reviewer.run_once() else 1)
