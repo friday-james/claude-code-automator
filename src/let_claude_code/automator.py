@@ -1446,6 +1446,10 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                 result_data = {}
                 start_time = time.time()
 
+                # Keep track of recent conversation for AI context
+                conversation_history = []
+                max_context_chars = 8000  # Limit context size
+
                 while True:
                     if time.time() - start_time > timeout:
                         process.kill()
@@ -1481,8 +1485,17 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
 
                             if self.use_gemini:
                                 self.telegram.send(f"🤖 *Claude asking:*\n_{question_text[:200]}_")
-                                # Ask AI (GPT-5 or Gemini)
-                                answer = self.ask_ai(question_text, f"Project: {self.project_dir}")
+
+                                # Build context from recent conversation
+                                context_parts = [f"Project: {self.project_dir}"]
+                                if conversation_history:
+                                    context_parts.append("\nRecent conversation:")
+                                    for msg in conversation_history[-5:]:  # Last 5 messages
+                                        context_parts.append(f"- {msg[:200]}...")  # Truncate long messages
+                                context = "\n".join(context_parts)
+
+                                # Ask AI (GPT-5 or Gemini) with conversation context
+                                answer = self.ask_ai(question_text, context)
                                 if answer:
                                     print("\n\033[92m✨ AI answered\033[0m")
                                     self.telegram.send("✨ *AI auto-answered*")
@@ -1509,13 +1522,16 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                                 except (BrokenPipeError, OSError) as e:
                                     self.log(f"Failed to send answer: {e}")
 
-                        # Print assistant messages in real-time
+                        # Print assistant messages in real-time and capture for context
                         if msg_type == "assistant" and "message" in data:
                             content = data["message"].get("content", [])
+                            message_text = []
                             for block in content:
                                 block_type = block.get("type")
                                 if block_type == "text":
-                                    print(block.get("text", ""), end="", flush=True)
+                                    text = block.get("text", "")
+                                    message_text.append(text)
+                                    print(text, end="", flush=True)
                                 elif block_type == "thinking":
                                     # Print thinking content with visual distinction
                                     thinking_text = block.get("thinking", "")
@@ -1524,6 +1540,16 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                                         for thought_line in thinking_text.split('\n'):
                                             print(f"\033[2m{thought_line}\033[0m", flush=True)
                                         print("\033[2m--- End Thinking ---\033[0m\n", flush=True)
+
+                            # Add to conversation history for AI context
+                            if message_text:
+                                full_text = "".join(message_text)
+                                conversation_history.append(full_text)
+                                # Trim history if it gets too large
+                                total_chars = sum(len(msg) for msg in conversation_history)
+                                while total_chars > max_context_chars and len(conversation_history) > 1:
+                                    removed = conversation_history.pop(0)
+                                    total_chars -= len(removed)
 
                         # Capture final result with usage
                         if msg_type == "result":
