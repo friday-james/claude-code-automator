@@ -1929,8 +1929,12 @@ def run_with_cron(reviewer: AutoReviewer, cron_expr: str):
 
 def main():
     # Load environment variables from .env file
-    from dotenv import load_dotenv
-    load_dotenv(dotenv_path=os.path.join(os.getcwd(), ".env"), override=False)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=os.path.join(os.getcwd(), ".env"), override=False)
+    except ImportError:
+        # python-dotenv not installed, skip loading .env file
+        pass
 
     parser = argparse.ArgumentParser(
         description="Claude Automator - Automatically improve your codebase",
