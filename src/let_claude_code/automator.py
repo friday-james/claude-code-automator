@@ -1473,12 +1473,13 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     text=True,
                 )
 
-                # For new sessions, send prompt via stdin and close immediately
-                # Claude won't process until stdin is closed
+                # For new sessions, send prompt via stdin
+                # IMPORTANT: Do NOT close stdin here - Claude needs it open
+                # to receive user input when asking questions (e.g., permission prompts)
                 if not self.session_id:
                     try:
                         process.stdin.write(prompt)
-                        process.stdin.close()
+                        process.stdin.flush()
                     except (BrokenPipeError, OSError) as e:
                         self.log(f"Failed to send prompt: {e}")
                         process.kill()
