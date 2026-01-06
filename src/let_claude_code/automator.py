@@ -1449,7 +1449,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             atexit.register(cleanup_temp_file)
 
             try:
-                # Build command
+                # Build command - pass prompt as positional arg to keep stdin free for input
                 cmd = ["claude", "--print", "--output-format", "stream-json", "--verbose"]
                 if self.session_id:
                     cmd.extend(["--resume", self.session_id])
@@ -1462,8 +1462,10 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         expanded_flags.append(os.path.expanduser(flag))
                     cmd.extend(expanded_flags)
 
+                # Pass prompt as final argument (not via stdin) so stdin stays open for input
+                cmd.append(prompt)
 
-                # Run claude
+                # Run claude with stdin as pipe so we can write answers during execution
                 process = subprocess.Popen(
                     cmd,
                     cwd=self.project_dir,
@@ -1472,18 +1474,6 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     stderr=subprocess.STDOUT,
                     text=True,
                 )
-
-                # For new sessions, send prompt via stdin
-                # IMPORTANT: Do NOT close stdin here - Claude needs it open
-                # to receive user input when asking questions (e.g., permission prompts)
-                if not self.session_id:
-                    try:
-                        process.stdin.write(prompt)
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        self.log(f"Failed to send prompt: {e}")
-                        process.kill()
-                        return False, f"Failed to start Claude: {e}"
 
                 result_data = {}
                 start_time = time.time()
