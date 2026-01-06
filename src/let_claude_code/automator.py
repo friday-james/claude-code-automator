@@ -1656,6 +1656,13 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     os.unlink(prompt_file)
                 atexit.unregister(cleanup_temp_file)
 
+                # Close stdin_fd if we opened it
+                if stdin_fd and not stdin_fd.closed:
+                    try:
+                        stdin_fd.close()
+                    except OSError:
+                        pass
+
         except FileNotFoundError:
             return False, "Claude CLI not found"
         except OSError as e:
