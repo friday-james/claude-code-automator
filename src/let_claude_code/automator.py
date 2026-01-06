@@ -1449,7 +1449,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             atexit.register(cleanup_temp_file)
 
             try:
-                # Build command - use bash to redirect prompt file to stdin
+                # Build command - no stdin redirection in the command itself
                 base_cmd = "claude --print --output-format stream-json --verbose"
                 if self.session_id:
                     base_cmd += f" --resume {self.session_id}"
@@ -1461,26 +1461,27 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         expanded_flags.append(os.path.expanduser(flag))
                     base_cmd += " " + " ".join(expanded_flags)
 
-                # Pass prompt via file redirection, keep stdin from tty for user input
-                cmd = ["bash", "-c", f"{base_cmd} < '{prompt_file}'"]
+                # Run claude directly - stdin will be passed via Popen
+                cmd = ["bash", "-c", base_cmd]
 
-                # Use /dev/tty for stdin so user can provide input during execution
-                stdin_fd = None
-                if os.path.exists("/dev/tty"):
-                    try:
-                        stdin_fd = open("/dev/tty", "r")
-                    except OSError:
-                        pass
-
-                # Run claude
+                # Run claude with stdin pipe for prompt
                 process = subprocess.Popen(
                     cmd,
                     cwd=self.project_dir,
-                    stdin=stdin_fd if stdin_fd else subprocess.PIPE,
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                 )
+
+                # Write prompt to stdin
+                try:
+                    process.stdin.write(prompt)
+                    process.stdin.flush()
+                    # Don't close stdin yet - we may need to write answers later
+                    # Claude should be able to read the prompt without EOF
+                except (BrokenPipeError, OSError) as e:
+                    self.log(f"Failed to write prompt: {e}")
 
                 result_data = {}
                 start_time = time.time()
@@ -1511,14 +1512,13 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         msg_type = data.get("type", "")
 
                         # Handle user input requests from Claude
-                        # Note: This only works for resumed sessions where stdin is still open
                         if msg_type == "input_required":
                             question_text = data.get("message", {}).get("text", "") or data.get("description", "")
                             print(f"\n\033[93m🤖 Claude asking: {question_text[:100]}...\033[0m")
 
-                            # Check if stdin is still open (only for resumed sessions)
+                            # Write answer to stdin pipe
                             if process.stdin.closed:
-                                self.log("Warning: input_required received but stdin is closed (new session)")
+                                self.log("Warning: input_required received but stdin is closed")
                                 print("\n\033[91m⚠️ Cannot answer - stdin closed\033[0m")
                                 continue
 
@@ -1553,7 +1553,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                                     except (BrokenPipeError, OSError) as e:
                                         self.log(f"Failed to send fallback answer: {e}")
                             else:
-                                # Gemini not enabled, auto-proceed with 'y'
+                                # Auto-proceed with 'y'
                                 print("\n\033[90m→ Auto-answering 'y'\033[0m")
                                 try:
                                     process.stdin.write("y\n")
@@ -1626,19 +1626,10 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     print("💡 Check quota: run 'claude' then type '/usage'")
                     print(f"{'─'*60}\n")
 
-                # Close stdin if still open (after potential gemini answers)
-                # Don't close /dev_tty stdin as it might cause issues
+                # Close stdin if still open (after potential AI answers)
                 try:
-                    stdin_fd_num = None
-                    if hasattr(process.stdin, 'fileno'):
-                        try:
-                            stdin_fd_num = process.stdin.fileno()
-                        except (OSError, ValueError):
-                            pass
-                    # Only close if it's not from /dev/tty (fd is usually 0 for tty)
-                    if stdin_fd_num is None or stdin_fd_num != 0:
-                        if not process.stdin.closed:
-                            process.stdin.close()
+                    if process.stdin and not process.stdin.closed:
+                        process.stdin.close()
                 except OSError:
                     pass
 
@@ -1655,13 +1646,6 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                 if prompt_file and os.path.exists(prompt_file):
                     os.unlink(prompt_file)
                 atexit.unregister(cleanup_temp_file)
-
-                # Close stdin_fd if we opened it
-                if stdin_fd and not stdin_fd.closed:
-                    try:
-                        stdin_fd.close()
-                    except OSError:
-                        pass
 
         except FileNotFoundError:
             return False, "Claude CLI not found"
