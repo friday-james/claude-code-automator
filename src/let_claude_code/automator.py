@@ -1140,21 +1140,107 @@ class AutoReviewer:
         return None
 
     # ============================================================================
-    # GEMINI INTEGRATION - Auto-answer Claude questions
+    # AI INTEGRATION - Auto-answer Claude questions with Gemini or GPT-5
     # ============================================================================
 
-    def ask_gemini(self, question: str, context: str = "") -> str | None:
-        """Send a question to Gemini and get an answer."""
-        api_key = os.environ.get("GEMINI_API_KEY")
+    def ask_ai(self, question: str, context: str = "") -> str | None:
+        """Send a question to AI (Gemini or GPT-5) and get an answer."""
+        # Try GPT-5 first if API key is available
+        if os.environ.get("OPENAI_API_KEY"):
+            answer = self.ask_gpt5(question, context)
+            if answer:
+                return answer
+
+        # Fall back to Gemini
+        if os.environ.get("GEMINI_API_KEY"):
+            return self.ask_gemini(question, context)
+
+        self.log("No AI API keys found (OPENAI_API_KEY or GEMINI_API_KEY)")
+        return None
+
+    def ask_gpt5(self, question: str, context: str = "") -> str | None:
+        """Send a question to GPT-5.2 and get an answer with max reasoning."""
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            self.log("Gemini API key not found in environment")
             return None
 
         try:
             import urllib.request
             import urllib.error
+            import json
 
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+            url = "https://api.openai.com/v1/responses"
+
+            prompt = f"""You are helping an AI coding assistant (Claude) answer a question.
+
+Context about the project/codebase:
+{context if context else "General question - use your knowledge"}
+
+Question from Claude:
+{question}
+
+Provide a clear, direct answer that Claude can use. Be concise but thorough."""
+
+            data = {
+                "model": "gpt-5.2",
+                "input": prompt,
+                "reasoning": {
+                    "effort": "xhigh"  # Maximum reasoning effort
+                },
+                "text": {
+                    "verbosity": "medium"
+                },
+                "max_output_tokens": 65536  # Maximum output tokens
+            }
+
+            data_str = json.dumps(data).encode('utf-8')
+
+            req = urllib.request.Request(
+                url,
+                data=data_str,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}"
+                },
+                method="POST"
+            )
+
+            with urllib.request.urlopen(req, timeout=60) as response:
+                result = json.loads(response.read().decode('utf-8'))
+
+                # Extract text from GPT-5 response
+                if result.get("output"):
+                    answer = result["output"]
+                    self.log(f"GPT-5 answered: {answer[:100]}...")
+                    return answer
+                else:
+                    self.log(f"GPT-5 response had no output: {result}")
+                    return None
+
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8') if e.fp else ""
+            self.log(f"GPT-5 HTTP {e.code} error: {error_body[:200]}")
+            return None
+        except urllib.error.URLError as e:
+            self.log(f"GPT-5 URL error: {e.reason}")
+            return None
+        except Exception as e:
+            self.log(f"GPT-5 API error: {type(e).__name__}: {e}")
+            return None
+
+    def ask_gemini(self, question: str, context: str = "") -> str | None:
+        """Send a question to Gemini 3 Pro and get an answer with max reasoning."""
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return None
+
+        try:
+            import urllib.request
+            import urllib.error
+            import json
+
+            # Use Gemini 3 Pro Preview - the latest and most capable model
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={api_key}"
 
             prompt = f"""You are helping an AI coding assistant (Claude) answer a question.
 
@@ -1170,11 +1256,10 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "temperature": 0.2,
-                    "maxOutputTokens": 1024,
+                    "maxOutputTokens": 65536,  # Maximum output tokens
                 }
             }
 
-            import json
             data_str = json.dumps(data).encode('utf-8')
 
             req = urllib.request.Request(
@@ -1184,12 +1269,12 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                 method="POST"
             )
 
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=60) as response:
                 result = json.loads(response.read().decode('utf-8'))
 
                 if result.get("candidates"):
                     answer = result["candidates"][0]["content"]["parts"][0]["text"]
-                    self.log(f"Gemini answered: {answer[:100]}...")
+                    self.log(f"Gemini 3 Pro answered: {answer[:100]}...")
                     return answer
                 else:
                     self.log(f"Gemini response had no candidates: {result}")
@@ -1297,7 +1382,6 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
         import tempfile
         import json
 
-        self.log(f"run_claude called with prompt length: {len(prompt)}")
 
         # Append thinking keyword if not normal
         if self.think_level != "normal":
@@ -1337,14 +1421,8 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         expanded_flags.append(os.path.expanduser(flag))
                     cmd.extend(expanded_flags)
 
-                # For new sessions (not resumed), add the prompt as last argument
-                if not self.session_id:
-                    cmd.append(prompt)
 
-                # Debug: print command being run
-                self.log(f"Running command: {' '.join(cmd[:5])}... (prompt length: {len(prompt) if not self.session_id else 'N/A (resumed)'})")
-
-                # Run claude - keep stdin open for potential input_required responses
+                # Run claude
                 process = subprocess.Popen(
                     cmd,
                     cwd=self.project_dir,
@@ -1354,13 +1432,16 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     text=True,
                 )
 
-                # Close stdin if we're not using Gemini (no need to keep it open for answers)
-                # When prompt is passed as argument, Claude doesn't need stdin
-                if not self.use_gemini and not self.session_id:
+                # For new sessions, send prompt via stdin and close immediately
+                # Claude won't process until stdin is closed
+                if not self.session_id:
                     try:
+                        process.stdin.write(prompt)
                         process.stdin.close()
-                    except OSError:
-                        pass
+                    except (BrokenPipeError, OSError) as e:
+                        self.log(f"Failed to send prompt: {e}")
+                        process.kill()
+                        return False, f"Failed to start Claude: {e}"
 
                 result_data = {}
                 start_time = time.time()
@@ -1387,30 +1468,46 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         msg_type = data.get("type", "")
 
                         # Handle user input requests from Claude
+                        # Note: This only works for resumed sessions where stdin is still open
                         if msg_type == "input_required":
                             question_text = data.get("message", {}).get("text", "") or data.get("description", "")
                             print(f"\n\033[93m🤖 Claude asking: {question_text[:100]}...\033[0m")
 
+                            # Check if stdin is still open (only for resumed sessions)
+                            if process.stdin.closed:
+                                self.log("Warning: input_required received but stdin is closed (new session)")
+                                print("\n\033[91m⚠️ Cannot answer - stdin closed\033[0m")
+                                continue
+
                             if self.use_gemini:
                                 self.telegram.send(f"🤖 *Claude asking:*\n_{question_text[:200]}_")
-                                # Ask Gemini
-                                answer = self.ask_gemini(question_text, f"Project: {self.project_dir}")
+                                # Ask AI (GPT-5 or Gemini)
+                                answer = self.ask_ai(question_text, f"Project: {self.project_dir}")
                                 if answer:
-                                    print("\n\033[92m✨ Gemini answered\033[0m")
-                                    self.telegram.send("✨ *Gemini auto-answered*")
-                                    process.stdin.write(answer + "\n")
-                                    process.stdin.flush()
+                                    print("\n\033[92m✨ AI answered\033[0m")
+                                    self.telegram.send("✨ *AI auto-answered*")
+                                    try:
+                                        process.stdin.write(answer + "\n")
+                                        process.stdin.flush()
+                                    except (BrokenPipeError, OSError) as e:
+                                        self.log(f"Failed to send answer: {e}")
                                 else:
-                                    # Gemini failed, use default "y" to proceed
-                                    print("\n\033[91m⚠️ Gemini failed, proceeding with 'y'\033[0m")
-                                    self.telegram.send("⚠️ *Gemini failed, proceeding with 'y'*")
-                                    process.stdin.write("y\n")
-                                    process.stdin.flush()
+                                    # AI failed, use default "y" to proceed
+                                    print("\n\033[91m⚠️ AI failed, proceeding with 'y'\033[0m")
+                                    self.telegram.send("⚠️ *AI failed, proceeding with 'y'*")
+                                    try:
+                                        process.stdin.write("y\n")
+                                        process.stdin.flush()
+                                    except (BrokenPipeError, OSError) as e:
+                                        self.log(f"Failed to send fallback answer: {e}")
                             else:
                                 # Gemini not enabled, auto-proceed with 'y'
                                 print("\n\033[90m→ Auto-answering 'y'\033[0m")
-                                process.stdin.write("y\n")
-                                process.stdin.flush()
+                                try:
+                                    process.stdin.write("y\n")
+                                    process.stdin.flush()
+                                except (BrokenPipeError, OSError) as e:
+                                    self.log(f"Failed to send answer: {e}")
 
                         # Print assistant messages in real-time
                         if msg_type == "assistant" and "message" in data:
@@ -1627,9 +1724,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             # Default: just run on the current branch without creating a new one
             if not self.create_pr:
                 self.log("Running in no-PR mode (commits only)...")
-                self.log("About to call run_claude...")
                 success, summary = self.run_claude(self.review_prompt, timeout=3600)
-                self.log(f"run_claude returned: success={success}")
                 if not success:
                     self.telegram.send("⚠️ *Auto-Review Failed*\n\nClaude failed.")
                     return False
@@ -1799,7 +1894,7 @@ def main():
     parser.add_argument("--clear-sessions", action="store_true",
                         help="Clear all saved sessions and exit")
     parser.add_argument("--auto-gemini-answer", action="store_true",
-                        help="Auto-answer Claude's questions using Gemini (requires GEMINI_API_KEY env var)")
+                        help="Auto-answer Claude's questions using AI (GPT-5.2 or Gemini 3 Pro). Requires OPENAI_API_KEY or GEMINI_API_KEY env var")
 
     args = parser.parse_args()
 
@@ -1929,28 +2024,43 @@ def main():
             print("\nProceeding anyway (--yes flag set)")
             print("Note: Claude may prompt for permissions during execution.\n")
 
-    # Check for Gemini API key if --auto-gemini-answer is requested
+    # Check for AI API keys if --auto-gemini-answer is requested
     use_gemini = False
     if args.auto_gemini_answer:
+        openai_key = os.environ.get("OPENAI_API_KEY")
         gemini_key = os.environ.get("GEMINI_API_KEY")
-        if not gemini_key:
-            print("\n" + "=" * 60)
-            print("🤖 Gemini Auto-Answer requested")
-            print("=" * 60)
-            print("To use --auto-gemini-answer, you need a Gemini API key.")
-            print("Get one from: https://aistudio.google.com/app/apikey")
-            try:
-                gemini_key = input("\nEnter your Gemini API key (or press Enter to skip): ").strip()
-                if gemini_key:
-                    os.environ["GEMINI_API_KEY"] = gemini_key
-                    use_gemini = True
-                else:
-                    print("Skipping Gemini auto-answer.")
-            except (EOFError, KeyboardInterrupt):
-                print("\nSkipping Gemini auto-answer.")
-        else:
+
+        if openai_key or gemini_key:
             use_gemini = True
-            print("✓ Gemini API key found")
+            if openai_key:
+                print("✓ OpenAI API key found (GPT-5.2 will be used)")
+            if gemini_key:
+                print("✓ Gemini API key found (Gemini 3 Pro will be used as fallback)")
+        else:
+            print("\n" + "=" * 60)
+            print("🤖 AI Auto-Answer requested")
+            print("=" * 60)
+            print("To use --auto-gemini-answer, you need either:")
+            print("  • OpenAI API key (for GPT-5.2) - https://platform.openai.com/api-keys")
+            print("  • Gemini API key (for Gemini 3 Pro) - https://aistudio.google.com/app/apikey")
+            try:
+                choice = input("\nEnter API key type [openai/gemini] (or press Enter to skip): ").strip().lower()
+                if choice == "openai":
+                    api_key = input("Enter your OpenAI API key: ").strip()
+                    if api_key:
+                        os.environ["OPENAI_API_KEY"] = api_key
+                        use_gemini = True
+                        print("✓ OpenAI API key set")
+                elif choice == "gemini":
+                    api_key = input("Enter your Gemini API key: ").strip()
+                    if api_key:
+                        os.environ["GEMINI_API_KEY"] = api_key
+                        use_gemini = True
+                        print("✓ Gemini API key set")
+                else:
+                    print("Skipping AI auto-answer.")
+            except (EOFError, KeyboardInterrupt):
+                print("\nSkipping AI auto-answer.")
 
     # Get current branch name
     try:
