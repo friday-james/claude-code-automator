@@ -1772,18 +1772,14 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             if not self.create_pr:
                 self.log("Running in no-PR mode (commits only)...")
 
-                # Incorporate Gemini's feedback from previous iteration if available
-                prompt = self.review_prompt
+                # Use AI consultant's goal if available (replaces original prompt)
                 if self.gemini_feedback:
-                    prompt = f"""{self.review_prompt}
-
-IMPORTANT - Feedback from AI Consultant (Gemini):
-{self.gemini_feedback}
-
-Please address the above feedback in this iteration."""
-                    self.log(f"Using Gemini feedback: {self.gemini_feedback[:200]}...")
+                    prompt = self.gemini_feedback
+                    self.log(f"Using AI-generated goal: {self.gemini_feedback[:200]}...")
                     # Clear feedback after using it
                     self.gemini_feedback = None
+                else:
+                    prompt = self.review_prompt
 
                 success, summary = self.run_claude(prompt, timeout=3600)
                 if not success:
@@ -1807,12 +1803,13 @@ Recent Commits:
 Changes:
 {diff_stat.strip() if diff_stat.strip() else 'No changes'}"""
 
-                # Ask Gemini to review what Claude did
+                # Ask AI consultant to review what Claude did and set next goal
                 if self.use_ai:
-                    print("\n\033[95m🔮 Asking Gemini to review Claude's work...\033[0m")
-                    self.telegram.send("🔮 *Gemini reviewing Claude's work...*")
+                    ai_name = self.ai_model if self.ai_model != "auto" else "AI"
+                    print(f"\n\033[95m🔮 Asking {ai_name} to review Claude's work and set next goal...\033[0m")
+                    self.telegram.send(f"🔮 *{ai_name} reviewing Claude's work...*")
 
-                    gemini_question = """Review what Claude just accomplished.
+                    gemini_question = """Review what Claude just accomplished and determine the next goal.
 
 IMPORTANT:
 - If Claude stated "Goal achieved!" in the summary, trust that assessment
@@ -1823,53 +1820,76 @@ IMPORTANT:
 Respond in this EXACT format:
 GOAL_ACHIEVED: YES or NO
 CONTINUE: YES or NO
-NEXT_FOCUS: (only if CONTINUE is YES, otherwise write "N/A")
 
-Be concise and direct."""
+If CONTINUE is YES, provide a complete goal statement that will become Claude's next task.
+The goal should be clear, specific, and actionable. Format it as a proper prompt that instructs Claude what to do next.
+
+NEXT_GOAL:
+(If CONTINUE is YES, write a complete goal/prompt here. If CONTINUE is NO, write "N/A")
+"""
 
                     gemini_feedback = self.ask_ai(gemini_question, gemini_context)
 
                     if gemini_feedback:
-                        print(f"\n\033[92m✨ Gemini's Review:\033[0m\n{gemini_feedback}\n")
-                        self.telegram.send(f"✨ *Gemini's Review:*\n{gemini_feedback[:500]}")
+                        print(f"\n\033[92m✨ {ai_name}'s Review:\033[0m\n{gemini_feedback}\n")
+                        self.telegram.send(f"✨ *{ai_name}'s Review:*\n{gemini_feedback[:500]}")
 
                         # Parse the key-value format
                         goal_achieved = False
                         should_continue = True
-                        focus_next = None
+                        next_goal = None
 
-                        for line in gemini_feedback.split('\n'):
-                            line = line.strip()
-                            if line.startswith('GOAL_ACHIEVED:'):
-                                value = line.split(':', 1)[1].strip().upper()
+                        lines = gemini_feedback.split('\n')
+                        in_goal_section = False
+                        goal_lines = []
+
+                        for line in lines:
+                            line_stripped = line.strip()
+
+                            if line_stripped.startswith('GOAL_ACHIEVED:'):
+                                value = line_stripped.split(':', 1)[1].strip().upper()
                                 goal_achieved = 'YES' in value
-                            elif line.startswith('CONTINUE:'):
-                                value = line.split(':', 1)[1].strip().upper()
+                                in_goal_section = False
+                            elif line_stripped.startswith('CONTINUE:'):
+                                value = line_stripped.split(':', 1)[1].strip().upper()
                                 should_continue = 'YES' in value
-                            elif line.startswith('NEXT_FOCUS:'):
-                                focus_next = line.split(':', 1)[1].strip()
-                                if focus_next.upper() == 'N/A':
-                                    focus_next = None
+                                in_goal_section = False
+                            elif line_stripped.startswith('NEXT_GOAL:'):
+                                in_goal_section = True
+                                # Check if goal is on the same line
+                                rest = line_stripped.split(':', 1)[1].strip()
+                                if rest and rest.upper() != 'N/A':
+                                    goal_lines.append(rest)
+                            elif in_goal_section:
+                                # Collect all lines after NEXT_GOAL:
+                                if line_stripped and line_stripped.upper() != 'N/A':
+                                    goal_lines.append(line)
+
+                        if goal_lines:
+                            next_goal = '\n'.join(goal_lines).strip()
+                            if next_goal.upper() == 'N/A':
+                                next_goal = None
 
                         # Check if goal is achieved
                         if goal_achieved:
-                            self.log("Gemini confirmed goal achieved")
-                            self.telegram.send("✅ *Goal Achieved!*\n\nGemini confirmed the task is complete.")
+                            self.log(f"{ai_name} confirmed goal achieved")
+                            self.telegram.send(f"✅ *Goal Achieved!*\n\n{ai_name} confirmed the task is complete.")
                             return "completed"
 
                         # Check if we should stop
                         if not should_continue:
-                            self.log("Gemini says to stop")
-                            self.telegram.send("✅ *Gemini says stop*\n\nNo more work needed.")
+                            self.log("AI consultant says to stop")
+                            self.telegram.send("✅ *AI says stop*\n\nNo more work needed.")
                             return "completed"
 
-                        # Store feedback for next iteration if we should continue
-                        if should_continue and focus_next:
-                            self.gemini_feedback = focus_next
-                            self.log(f"Stored Gemini feedback for next iteration: {focus_next[:100]}...")
+                        # Store next goal for next iteration if we should continue
+                        if should_continue and next_goal:
+                            self.gemini_feedback = next_goal
+                            self.log(f"AI consultant set next goal: {next_goal[:100]}...")
+                            print(f"\n\033[96m📋 Next goal set by AI:\033[0m\n{next_goal[:300]}{'...' if len(next_goal) > 300 else ''}\n")
                     else:
-                        print("\n\033[91m⚠️ Gemini failed to provide feedback\033[0m")
-                        self.telegram.send("⚠️ *Gemini failed to provide feedback*")
+                        print(f"\n\033[91m⚠️ {ai_name} failed to provide feedback\033[0m")
+                        self.telegram.send(f"⚠️ *{ai_name} failed to provide feedback*")
 
                 # Check if Claude indicated the goal/task is complete (always check, regardless of commits)
                 # Strip markdown formatting for more reliable detection
@@ -2342,7 +2362,12 @@ def main():
     if resume_session_id:
         reviewer.session_id = resume_session_id
 
-    if args.once:
+    # When --auto-answer is enabled without explicit loop flags,
+    # default to loop-until-finish behavior (AI consultant drives completion)
+    if use_ai and not any([args.once, args.loop, args.loop_until_finish, args.interval, args.cron]):
+        print("🤖 AI auto-answer enabled: looping until AI determines task is complete")
+        run_loop(reviewer, until_finish=True)
+    elif args.once:
         sys.exit(0 if reviewer.run_once() else 1)
     elif args.loop:
         run_loop(reviewer, until_finish=False)

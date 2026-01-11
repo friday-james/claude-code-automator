@@ -15,7 +15,8 @@ You: *reviews the changes*
 
 **Our Solution**: Full autonomy.
 
-- **🤖 AI Auto-Answer**: Claude asks a question? AI answers it instantly. Choose from cost-effective to premium models.
+- **🤖 AI Consultation Loop**: GPT-5.2 or Gemini reviews Claude's work and sets the next goal. True multi-AI collaboration.
+- **💬 AI Auto-Answer**: Claude asks a question? AI answers it instantly. Choose from cost-effective to premium models.
 - **⚡ Permission Bypass**: Configured once, runs forever without prompts.
 - **🔄 Loop & Schedule**: Run continuously or on cron. Walk away. Come back to improvements.
 - **🚀 PR Automation**: Creates branches, opens PRs, reviews them, merges approved ones.
@@ -277,9 +278,9 @@ cook --loop --create-pr
 
 ---
 
-## AI Auto-Answer
+## AI Consultation Loop
 
-When Claude asks questions during automation, let AI answer them automatically. Choose from cost-effective to premium models.
+Let AI consultants (GPT-5.2, Gemini) guide Claude's work autonomously. The AI consultant reviews what Claude does and sets the next goal, creating a true multi-AI collaboration loop.
 
 **Setup:**
 
@@ -298,24 +299,57 @@ echo "GEMINI_API_KEY=..." >> .env
 **Usage:**
 
 ```bash
-# Run with AI auto-answer (uses cost-effective defaults)
-cook --loop -m fix_bugs --auto-answer -y
+# AI-driven loop (AI consultant determines when complete)
+cook --auto-answer -g "Improve code quality across the project"
 
-# Choose specific model
-cook --loop --auto-answer --ai-model gpt-4o-mini      # Cheapest OpenAI
-cook --loop --auto-answer --ai-model gpt-4o           # Balanced
-cook --loop --auto-answer --ai-model gpt-5.2          # Premium reasoning
-cook --loop --auto-answer --ai-model gemini-1.5-flash # Cheapest Gemini
-cook --loop --auto-answer --ai-model gemini-1.5-pro   # Balanced Gemini
+# Choose specific AI model
+cook --auto-answer --ai-model gpt-4o-mini      # Cheapest OpenAI (default)
+cook --auto-answer --ai-model gpt-4o           # Balanced
+cook --auto-answer --ai-model gpt-5.2          # Premium reasoning
+cook --auto-answer --ai-model gemini-1.5-flash # Cheapest Gemini
+cook --auto-answer --ai-model gemini-1.5-pro   # Balanced Gemini
 
-# Auto mode (default) - uses gpt-4o-mini or gemini-1.5-flash
-cook --loop --auto-answer
+# Still works with explicit loop flags
+cook --loop --auto-answer -m fix_bugs          # Loop forever
+cook --once --auto-answer -g "Fix bug"         # Run once only
 
 # YOLO mode (includes auto-answer)
 cook --yolo -m improve_code
 ```
 
-**How it works:**
+**How the AI Consultation Loop works:**
+
+1. **Iteration 1**: Claude works on your initial goal (e.g., "Improve code quality")
+2. **AI Review**: GPT-5.2/Gemini reviews Claude's commits and sets next goal (e.g., "Add docstrings to math_utils.py")
+3. **Iteration 2**: Claude works on AI's goal → AI reviews → AI sets new goal (e.g., "Add type hints")
+4. **Iteration 3**: Claude adds type hints → AI reviews → "GOAL_ACHIEVED: YES" → Loop exits ✓
+
+**Example output:**
+
+```
+[Run #1]
+🔮 Asking gpt-5.2 to review Claude's work and set next goal...
+✨ gpt-5.2's Review:
+GOAL_ACHIEVED: NO
+CONTINUE: YES
+NEXT_GOAL:
+Add comprehensive docstrings to all functions in math_utils.py.
+Use Google-style format with descriptions, args, and returns sections.
+
+📋 Next goal set by AI:
+Add comprehensive docstrings to all functions in math_utils.py...
+
+[Run #2]
+Claude adds docstrings → gpt-5.2 reviews → sets new goal...
+
+[Run #3]
+✅ Goal Achieved!
+gpt-5.2 confirmed the task is complete.
+```
+
+**AI Auto-Answer (for Claude's questions):**
+
+When enabled, AI also auto-answers any questions Claude asks during execution:
 
 1. Claude encounters a question (e.g., "Should I create a new file or edit existing?")
 2. Automator sends question + recent conversation context to AI
@@ -388,8 +422,8 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
 | `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
-| `--auto-answer` | Auto-answer Claude's questions with AI (requires API key) |
-| `--ai-model MODEL` | AI model: `auto`, `gpt-4o-mini`, `gpt-4o`, `gpt-5.2`, `gemini-1.5-flash`, `gemini-1.5-pro`, `gemini-3-pro-preview` |
+| `--auto-answer` | Enable AI consultation loop + auto-answer (requires API key). Auto-loops until AI determines task is complete. |
+| `--ai-model MODEL` | AI consultant model: `auto`, `gpt-4o-mini`, `gpt-4o`, `gpt-5.2`, `gemini-1.5-flash`, `gemini-1.5-pro`, `gemini-3-pro-preview` |
 | `--claude "FLAGS"` | Additional flags to pass to Claude CLI |
 | `--resume` | Resume from a previous session |
 | `--clear-sessions` | Clear all saved sessions |
