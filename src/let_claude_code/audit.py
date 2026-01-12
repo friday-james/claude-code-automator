@@ -100,7 +100,8 @@ Be specific and direct. Claude will execute these instructions.
                 "text": {
                     "verbosity": "medium"
                 },
-                "max_output_tokens": 16384
+                "max_output_tokens": 16384,
+                "stream": True  # Enable streaming to avoid timeouts
             }
         else:
             # GPT-4 models use Chat Completions API
@@ -129,21 +130,67 @@ Be specific and direct. Claude will execute these instructions.
         print(f"🔍 Sending to {model} for audit...")
 
         # GPT-5 models can take longer, especially with high reasoning effort
-        timeout = 300 if is_gpt5 else 120
+        # With streaming, we get chunks as they arrive (no timeout issues)
+        timeout = 600 if is_gpt5 else 120
 
         with urllib.request.urlopen(req, timeout=timeout) as response:
-            result = json.loads(response.read().decode('utf-8'))
+            if is_gpt5 and data.get("stream"):
+                # Handle streaming response (Server-Sent Events)
+                output_chunks = []
+                print("💭 Streaming response...", flush=True)
 
-            if is_gpt5:
-                if result.get("output"):
-                    return result["output"]
+                for line in response:
+                    line = line.decode('utf-8').strip()
+
+                    # SSE format: "data: {...}"
+                    if line.startswith('data: '):
+                        data_str = line[6:]  # Remove "data: " prefix
+
+                        if data_str == '[DONE]':
+                            break
+
+                        try:
+                            chunk_data = json.loads(data_str)
+                            chunk_type = chunk_data.get("type", "")
+
+                            # Collect output deltas
+                            if chunk_type == "response.output.delta":
+                                delta = chunk_data.get("delta", "")
+                                if delta:
+                                    output_chunks.append(delta)
+                                    print(".", end="", flush=True)  # Progress indicator
+
+                            # Final response
+                            elif chunk_type == "response.done":
+                                response_obj = chunk_data.get("response", {})
+                                if response_obj.get("output"):
+                                    # Prefer complete output from response.done
+                                    print("\n✓ Stream complete", flush=True)
+                                    return response_obj["output"]
+                        except json.JSONDecodeError:
+                            continue
+
+                # Fallback to assembled chunks
+                if output_chunks:
+                    print("\n✓ Stream complete", flush=True)
+                    return "".join(output_chunks)
+
+                print("\n⚠️  No output in stream", flush=True)
+                return None
             else:
-                # GPT-4 response format
-                if result.get("choices") and len(result["choices"]) > 0:
-                    return result["choices"][0]["message"]["content"]
+                # Non-streaming response (GPT-4 or non-stream GPT-5)
+                result = json.loads(response.read().decode('utf-8'))
 
-            print(f"Error: No output from {model}")
-            return None
+                if is_gpt5:
+                    if result.get("output"):
+                        return result["output"]
+                else:
+                    # GPT-4 response format
+                    if result.get("choices") and len(result["choices"]) > 0:
+                        return result["choices"][0]["message"]["content"]
+
+                print(f"Error: No output from {model}")
+                return None
 
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8') if e.fp else ""
