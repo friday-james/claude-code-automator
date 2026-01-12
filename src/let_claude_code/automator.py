@@ -1001,6 +1001,7 @@ class AutoReviewer:
         work_branch: str | None = None,
         claude_flags: str | None = None,
         auto_yes: bool = False,
+        tool: str = "claude",
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
@@ -1022,7 +1023,8 @@ class AutoReviewer:
         self.use_ai = False  # Enable auto-answering Claude questions via AI
         self.ai_model = "auto"  # Which AI model to use: auto, gpt-4o-mini, gemini-1.5-flash, etc.
         self.auto_yes = auto_yes  # Skip confirmation prompts
-        self.gemini_feedback: str | None = None  # Feedback from Gemini to incorporate in next iteration
+        self.gemini_feedback: str | None = None  # Feedback from AI to incorporate in next iteration
+        self.tool = tool  # Which coding tool to use: "claude" or "codex"
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -1160,8 +1162,15 @@ class AutoReviewer:
                 self.log("No AI API keys found (OPENAI_API_KEY or GEMINI_API_KEY)")
                 return None
 
+        # Handle model aliases
+        model_aliases = {
+            "codex": "o1-mini",  # Alias: codex → o1-mini (great for code)
+            "o1": "o1-preview",  # Alias: o1 → o1-preview
+        }
+        model = model_aliases.get(model, model)
+
         # Route to appropriate provider
-        if model.startswith("gpt-") or model.startswith("o1"):
+        if model.startswith("gpt-") or model.startswith("o1-") or model in ["o1-preview", "o1-mini"]:
             if not os.environ.get("OPENAI_API_KEY"):
                 self.log(f"{model} requested but no OPENAI_API_KEY found")
                 return None
@@ -1633,6 +1642,105 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             return False, "Claude CLI not found"
         except OSError as e:
             return False, f"Failed to run Claude: {e}"
+
+    def run_codex(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
+        """Run Codex CLI with the given prompt."""
+        import tempfile
+        import atexit
+
+        prompt_file = None
+
+        def cleanup_temp_file() -> None:
+            """Cleanup temp file on exit."""
+            if prompt_file and os.path.exists(prompt_file):
+                try:
+                    os.unlink(prompt_file)
+                except OSError:
+                    pass
+
+        try:
+            # Write prompt to a temp file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                f.write(prompt)
+                prompt_file = f.name
+
+            atexit.register(cleanup_temp_file)
+
+            try:
+                # Build codex command - assuming similar CLI to claude
+                base_cmd = "codex"
+                if self.claude_flags:  # Reuse flags parameter for codex too
+                    expanded_flags = []
+                    for flag in self.claude_flags.split():
+                        expanded_flags.append(os.path.expanduser(flag))
+                    base_cmd += " " + " ".join(expanded_flags)
+
+                # Pass prompt via file redirection
+                cmd = ["bash", "-c", f"{base_cmd} < '{prompt_file}'"]
+
+                # Run codex with stdin from /dev/tty if available
+                stdin_source = None
+                if os.path.exists("/dev/tty"):
+                    try:
+                        stdin_source = open("/dev/tty", "r")
+                    except OSError:
+                        pass
+
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=self.project_dir,
+                    stdin=stdin_source,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+
+                output_lines = []
+                start_time = time.time()
+
+                while True:
+                    if time.time() - start_time > timeout:
+                        process.kill()
+                        return False, "Codex timed out"
+
+                    line = process.stdout.readline()
+                    if not line:
+                        if process.poll() is not None:
+                            break
+                        time.sleep(0.01)
+                        continue
+
+                    # Print and capture output
+                    print(line, end="", flush=True)
+                    output_lines.append(line)
+
+                success = process.returncode == 0
+                summary = "".join(output_lines[-50:]) if output_lines else "Codex completed"
+
+                return success, summary
+
+            finally:
+                if prompt_file and os.path.exists(prompt_file):
+                    os.unlink(prompt_file)
+                atexit.unregister(cleanup_temp_file)
+
+                if 'stdin_source' in dir() and stdin_source and not stdin_source.closed:
+                    try:
+                        stdin_source.close()
+                    except OSError:
+                        pass
+
+        except FileNotFoundError:
+            return False, "Codex CLI not found"
+        except OSError as e:
+            return False, f"Failed to run Codex: {e}"
+
+    def run_tool(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
+        """Run the configured coding tool (claude or codex) with the given prompt."""
+        if self.tool == "codex":
+            return self.run_codex(prompt, timeout)
+        else:
+            return self.run_claude(prompt, timeout)
 
     def generate_branch_name(self) -> str:
         """Generate a unique branch name based on mode and timestamp."""

@@ -38,6 +38,7 @@ dev = [
 [project.scripts]
 cook = "let_claude_code.automator:main"
 cook-concurrent = "let_claude_code.concurrent:main"
+audit = "let_claude_code.audit:main"
 
 [project.urls]
 Homepage = "https://github.com/friday-james/let-claude-code"

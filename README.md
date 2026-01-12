@@ -15,6 +15,7 @@ You: *reviews the changes*
 
 **Our Solution**: Full autonomy.
 
+- **🔍 Code Audit**: GPT-5.2 reviews your code and directs Claude Code to fix it. Loop until perfect.
 - **🤖 AI Consultation Loop**: GPT-5.2 or Gemini reviews Claude's work and sets the next goal. True multi-AI collaboration.
 - **💬 AI Auto-Answer**: Claude asks a question? AI answers it instantly. Choose from cost-effective to premium models.
 - **⚡ Permission Bypass**: Configured once, runs forever without prompts.
@@ -46,7 +47,7 @@ Update:
 pip install --upgrade let-claude-code
 ```
 
-This installs the `cook` command.
+This installs the `cook` and `audit` commands.
 
 ---
 
@@ -64,6 +65,79 @@ cook --once -m fix_bugs -y
 ```
 
 By default, commits are made directly to your current branch. Use `--create-pr` to enable the full PR workflow with review cycles.
+
+---
+
+## Code Audit
+
+Let GPT-5.2 review your code and direct Claude Code to fix it.
+
+```bash
+# Audit a file (GPT-5.2 reviews → Claude Code fixes)
+export OPENAI_API_KEY=sk-...
+audit path/to/file.py
+
+# Audit a directory
+audit src/
+
+# Loop until GPT-5.2 says "no more issues"
+audit . --until-complete
+
+# Use different models
+audit . --ai-model gpt-5.2           # GPT-5.2 (best, requires Responses API access)
+audit . --ai-model gpt-4o            # GPT-4o (good balance)
+audit . --ai-model gpt-4o-mini       # GPT-4o-mini (cheapest, great for testing)
+```
+
+**How it works:**
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│   YOU RUN:  audit src/app.py --until-complete           │
+│                                                          │
+│   ITERATION 1:                                          │
+│   GPT-5.2: Reviews code → finds 4 issues                │
+│   GPT-5.2: Generates specific instructions for Claude   │
+│   Claude Code: Executes instructions → fixes issues     │
+│                                                          │
+│   ITERATION 2:                                          │
+│   GPT-5.2: Reviews updated code → finds 2 more issues   │
+│   Claude Code: Fixes them                               │
+│                                                          │
+│   ITERATION 3:                                          │
+│   GPT-5.2: Reviews → "ISSUES_FOUND: NO" → DONE ✓        │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Example output:**
+
+```
+🔍 Sending to gpt-5.2 for audit...
+
+📋 gpt-5.2 Audit Result:
+============================================================
+ISSUES_FOUND: YES
+CONTINUE: YES
+
+INSTRUCTIONS_FOR_CLAUDE:
+1. Add input validation to calculate_area() - ensure radius is non-negative
+2. Implement zero division check in divide() function
+3. Add __repr__ method to User class
+============================================================
+
+🤖 Running Claude Code with instructions...
+[Claude fixes all 3 issues]
+
+✓ Iteration 1 complete
+```
+
+**Use cases:**
+- **Pre-commit review**: `audit . --until-complete` before committing
+- **Legacy code cleanup**: `audit old_module/ --until-complete`
+- **Security audit**: `audit --ai-model gpt-5.2` for thorough analysis
+- **Quick check**: `audit file.py` (single pass)
 
 ---
 
