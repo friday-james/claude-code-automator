@@ -83,6 +83,11 @@ audit src/
 # Loop until GPT-5.2 says "no more issues"
 audit . --until-complete
 
+# Focus audit on specific goal
+audit . --goal "security"                    # Focus on security issues
+audit . --goal "performance" --until-complete # Optimize performance
+audit . --goal "code style and PEP8"         # Focus on style
+
 # Use different models
 audit . --ai-model gpt-5.2           # GPT-5.2 (best, requires Responses API access)
 audit . --ai-model gpt-4o            # GPT-4o (good balance)

@@ -3,11 +3,12 @@
 Code Audit - GPT-5.2 reviews your code and directs Claude to fix it.
 
 Usage:
-    audit path/to/file.py                   # Audit once (default)
-    audit path/to/directory --until-complete # Audit until GPT-5.2 says complete
-    audit path/to/file.py --until-complete  # Loop until all issues fixed
-    audit . --ai-model gpt-5.2              # Use specific GPT-5 model
-    audit . --ai-model gpt-4o-mini          # Use GPT-4 (cheaper testing)
+    audit path/to/file.py                        # Audit once (default)
+    audit src/ --until-complete                  # Audit until GPT-5.2 says complete
+    audit . --goal "security"                    # Focus audit on security issues
+    audit . --goal "performance" --until-complete # Loop until performance is optimized
+    audit . --ai-model gpt-5.2                   # Use specific GPT-5 model
+    audit . --ai-model gpt-4o-mini               # Use GPT-4 (cheaper testing)
 """
 
 import argparse
@@ -45,7 +46,7 @@ def read_target(target_path: Path) -> str:
         return "[Target not found]"
 
 
-def ask_gpt5(content: str, context: str, model: str = "gpt-5.2") -> str | None:
+def ask_gpt5(content: str, context: str, model: str = "gpt-5.2", goal: str | None = None) -> str | None:
     """Send content to GPT-5/GPT-4 for audit and get instructions for Claude."""
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -53,13 +54,18 @@ def ask_gpt5(content: str, context: str, model: str = "gpt-5.2") -> str | None:
         return None
 
     try:
+        # Add goal-specific instructions if provided
+        goal_instruction = ""
+        if goal:
+            goal_instruction = f"\n**AUDIT FOCUS**: {goal}\nPrioritize finding issues related to this goal.\n"
+
         prompt = f"""You are a code auditor working with Claude Code (an AI coding assistant).
 
 Your job is to:
 1. Review the code below
 2. Identify issues, bugs, improvements, or areas that need work
 3. Generate SPECIFIC, ACTIONABLE instructions for Claude Code to execute
-
+{goal_instruction}
 {context}
 
 Code to audit:
@@ -247,6 +253,7 @@ def main():
     )
     parser.add_argument("target", type=str, help="File or directory to audit")
     parser.add_argument("--until-complete", action="store_true", help="Loop until GPT-5.2 determines all issues are fixed (default: run once)")
+    parser.add_argument("--goal", "-g", type=str, help="Custom audit goal/focus (e.g., 'security', 'performance', 'code style')")
     parser.add_argument("--ai-model", type=str, default="gpt-5.2",
                        help="AI model: gpt-5.2 (default), gpt-5.2-pro, gpt-5-mini, gpt-4o, gpt-4o-mini")
 
@@ -270,6 +277,8 @@ def main():
     print(f"Code Audit with {args.ai_model}")
     print(f"{'='*60}")
     print(f"Target: {target_path}")
+    if args.goal:
+        print(f"Goal: {args.goal}")
     print(f"Mode: {'Loop until complete' if args.until_complete else 'Single run'}")
     print(f"{'='*60}\n")
 
@@ -287,7 +296,7 @@ def main():
 
         # Send to GPT-5.2 for audit
         context = f"This is iteration {iteration}. Previous iterations may have made changes."
-        audit_response = ask_gpt5(content, context, args.ai_model)
+        audit_response = ask_gpt5(content, context, args.ai_model, args.goal)
 
         if not audit_response:
             print("❌ Failed to get audit response from GPT-5.2")
