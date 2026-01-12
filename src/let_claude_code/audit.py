@@ -129,15 +129,16 @@ Be specific and direct. Claude will execute these instructions.
 
         print(f"🔍 Sending to {model} for audit...")
 
-        # GPT-5 models can take longer, especially with high reasoning effort
-        # With streaming, we get chunks as they arrive (no timeout issues)
-        timeout = 600 if is_gpt5 else 120
+        # GPT-5 models can take longer, especially with high reasoning effort on large files
+        # With streaming, we get chunks as they arrive, but initial reasoning can take time
+        # 15 minutes should be enough even for very large files with high reasoning
+        timeout = 900 if is_gpt5 else 120
 
         with urllib.request.urlopen(req, timeout=timeout) as response:
             if is_gpt5 and data.get("stream"):
                 # Handle streaming response (Server-Sent Events)
                 output_chunks = []
-                print("💭 Streaming response...", flush=True)
+                print("💭 Streaming response:\n", flush=True)
                 debug = os.environ.get("AUDIT_DEBUG") == "1"
 
                 for line in response:
@@ -160,19 +161,25 @@ Be specific and direct. Claude will execute these instructions.
                             if debug:
                                 print(f"[DEBUG] Type: {chunk_type}", flush=True)
 
+                            # Track reasoning progress
+                            if chunk_type == "response.output_item.added":
+                                item = chunk_data.get("item", {})
+                                if item.get("type") == "reasoning":
+                                    print("🧠 GPT-5.2 is reasoning (this may take several minutes for large files)...", flush=True)
+
                             # Collect output deltas (GPT-5 Responses API format)
                             if chunk_type == "response.output_text.delta":
                                 delta = chunk_data.get("delta", "")
                                 if delta:
                                     output_chunks.append(delta)
-                                    print(".", end="", flush=True)  # Progress indicator
+                                    print(delta, end="", flush=True)  # Print content in real-time
 
                             # Legacy format
                             elif chunk_type == "response.output.delta":
                                 delta = chunk_data.get("delta", "")
                                 if delta:
                                     output_chunks.append(delta)
-                                    print(".", end="", flush=True)
+                                    print(delta, end="", flush=True)
 
                             # Also try content_block.delta for text
                             elif chunk_type == "content_block.delta":
@@ -180,14 +187,14 @@ Be specific and direct. Claude will execute these instructions.
                                 text = delta_obj.get("text", "")
                                 if text:
                                     output_chunks.append(text)
-                                    print(".", end="", flush=True)
+                                    print(text, end="", flush=True)
 
                             # Final response
                             elif chunk_type == "response.done":
                                 response_obj = chunk_data.get("response", {})
                                 if response_obj.get("output"):
                                     # Prefer complete output from response.done
-                                    print("\n✓ Stream complete", flush=True)
+                                    print("\n\n✓ Stream complete", flush=True)
                                     return response_obj["output"]
 
                             # Message delta (another possible format)
@@ -196,8 +203,9 @@ Be specific and direct. Claude will execute these instructions.
                                 if delta_obj.get("content"):
                                     for content_item in delta_obj["content"]:
                                         if content_item.get("text"):
-                                            output_chunks.append(content_item["text"])
-                                            print(".", end="", flush=True)
+                                            text = content_item["text"]
+                                            output_chunks.append(text)
+                                            print(text, end="", flush=True)
 
                         except json.JSONDecodeError as e:
                             if debug:
@@ -206,7 +214,7 @@ Be specific and direct. Claude will execute these instructions.
 
                 # Fallback to assembled chunks
                 if output_chunks:
-                    print("\n✓ Stream complete", flush=True)
+                    print("\n\n✓ Stream complete", flush=True)
                     return "".join(output_chunks)
 
                 print("\n⚠️  No output in stream", flush=True)
