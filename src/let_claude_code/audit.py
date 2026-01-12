@@ -351,6 +351,8 @@ def main():
                        help="AI model: gpt-5.2 (default), gpt-5.2-pro, gpt-5-mini, gpt-4o, gpt-4o-mini")
     parser.add_argument("--reasoning", type=str, default="high", choices=["none", "low", "medium", "high", "xhigh"],
                        help="GPT-5 reasoning effort (default: high). Use 'medium' or 'low' for faster responses.")
+    parser.add_argument("--max-iterations", type=int, default=10,
+                       help="Maximum iterations when using --until-complete (default: 10)")
 
     args = parser.parse_args()
 
@@ -378,7 +380,7 @@ def main():
     print(f"{'='*60}\n")
 
     iteration = 0
-    max_iterations = 10 if args.until_complete else 1
+    max_iterations = args.max_iterations if args.until_complete else 1
 
     while iteration < max_iterations:
         iteration += 1
