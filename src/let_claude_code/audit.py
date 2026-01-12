@@ -70,7 +70,7 @@ Your job is to:
 
 Code to audit:
 ```
-{content[:30000]}
+{content}
 ```
 
 Respond in this EXACT format:
@@ -252,7 +252,7 @@ def run_claude_with_instructions(instructions: str, project_dir: Path) -> Tuple[
     print(f"\n{'='*60}")
     print("🤖 Running Claude Code with instructions:")
     print(f"{'='*60}")
-    print(instructions[:500] + ("..." if len(instructions) > 500 else ""))
+    print(instructions)
     print(f"{'='*60}\n")
 
     # Write instructions to temp file
