@@ -138,9 +138,13 @@ Be specific and direct. Claude will execute these instructions.
                 # Handle streaming response (Server-Sent Events)
                 output_chunks = []
                 print("💭 Streaming response...", flush=True)
+                debug = os.environ.get("AUDIT_DEBUG") == "1"
 
                 for line in response:
                     line = line.decode('utf-8').strip()
+
+                    if debug and line:
+                        print(f"\n[DEBUG] Line: {line[:200]}", flush=True)
 
                     # SSE format: "data: {...}"
                     if line.startswith('data: '):
@@ -153,12 +157,30 @@ Be specific and direct. Claude will execute these instructions.
                             chunk_data = json.loads(data_str)
                             chunk_type = chunk_data.get("type", "")
 
-                            # Collect output deltas
-                            if chunk_type == "response.output.delta":
+                            if debug:
+                                print(f"[DEBUG] Type: {chunk_type}", flush=True)
+
+                            # Collect output deltas (GPT-5 Responses API format)
+                            if chunk_type == "response.output_text.delta":
                                 delta = chunk_data.get("delta", "")
                                 if delta:
                                     output_chunks.append(delta)
                                     print(".", end="", flush=True)  # Progress indicator
+
+                            # Legacy format
+                            elif chunk_type == "response.output.delta":
+                                delta = chunk_data.get("delta", "")
+                                if delta:
+                                    output_chunks.append(delta)
+                                    print(".", end="", flush=True)
+
+                            # Also try content_block.delta for text
+                            elif chunk_type == "content_block.delta":
+                                delta_obj = chunk_data.get("delta", {})
+                                text = delta_obj.get("text", "")
+                                if text:
+                                    output_chunks.append(text)
+                                    print(".", end="", flush=True)
 
                             # Final response
                             elif chunk_type == "response.done":
@@ -167,7 +189,19 @@ Be specific and direct. Claude will execute these instructions.
                                     # Prefer complete output from response.done
                                     print("\n✓ Stream complete", flush=True)
                                     return response_obj["output"]
-                        except json.JSONDecodeError:
+
+                            # Message delta (another possible format)
+                            elif chunk_type == "message.delta":
+                                delta_obj = chunk_data.get("delta", {})
+                                if delta_obj.get("content"):
+                                    for content_item in delta_obj["content"]:
+                                        if content_item.get("text"):
+                                            output_chunks.append(content_item["text"])
+                                            print(".", end="", flush=True)
+
+                        except json.JSONDecodeError as e:
+                            if debug:
+                                print(f"\n[DEBUG] JSON error: {e}", flush=True)
                             continue
 
                 # Fallback to assembled chunks
@@ -176,6 +210,7 @@ Be specific and direct. Claude will execute these instructions.
                     return "".join(output_chunks)
 
                 print("\n⚠️  No output in stream", flush=True)
+                print("💡 Try: AUDIT_DEBUG=1 audit ... to see what's being received", flush=True)
                 return None
             else:
                 # Non-streaming response (GPT-4 or non-stream GPT-5)
