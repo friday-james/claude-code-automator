@@ -46,7 +46,7 @@ def read_target(target_path: Path) -> str:
         return "[Target not found]"
 
 
-def ask_gpt5(content: str, context: str, model: str = "gpt-5.2", goal: str | None = None) -> str | None:
+def ask_gpt5(content: str, context: str, model: str = "gpt-5.2", goal: str | None = None, reasoning_effort: str = "high") -> str | None:
     """Send content to GPT-5/GPT-4 for audit and get instructions for Claude."""
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -95,7 +95,7 @@ Be specific and direct. Claude will execute these instructions.
                 "model": model,
                 "input": prompt,
                 "reasoning": {
-                    "effort": "high"  # Use high reasoning for thorough audits
+                    "effort": reasoning_effort  # Configurable reasoning effort
                 },
                 "text": {
                     "verbosity": "medium"
@@ -128,7 +128,10 @@ Be specific and direct. Claude will execute these instructions.
 
         print(f"🔍 Sending to {model} for audit...")
 
-        with urllib.request.urlopen(req, timeout=120) as response:
+        # GPT-5 models can take longer, especially with high reasoning effort
+        timeout = 300 if is_gpt5 else 120
+
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             result = json.loads(response.read().decode('utf-8'))
 
             if is_gpt5:
@@ -256,6 +259,8 @@ def main():
     parser.add_argument("--goal", "-g", type=str, help="Custom audit goal/focus (e.g., 'security', 'performance', 'code style')")
     parser.add_argument("--ai-model", type=str, default="gpt-5.2",
                        help="AI model: gpt-5.2 (default), gpt-5.2-pro, gpt-5-mini, gpt-4o, gpt-4o-mini")
+    parser.add_argument("--reasoning", type=str, default="high", choices=["none", "low", "medium", "high", "xhigh"],
+                       help="GPT-5 reasoning effort (default: high). Use 'medium' or 'low' for faster responses.")
 
     args = parser.parse_args()
 
@@ -296,7 +301,7 @@ def main():
 
         # Send to GPT-5.2 for audit
         context = f"This is iteration {iteration}. Previous iterations may have made changes."
-        audit_response = ask_gpt5(content, context, args.ai_model, args.goal)
+        audit_response = ask_gpt5(content, context, args.ai_model, args.goal, args.reasoning)
 
         if not audit_response:
             print("❌ Failed to get audit response from GPT-5.2")
