@@ -24,3 +24,8 @@ jobs:
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_AGENT.CONFIG.MODEL: "gpt-4.1"
+          PR_AGENT.GITHUB_ACTION_CONFIG.AUTO_REVIEW: "true"
+          PR_AGENT.GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "true"
+          PR_AGENT.GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "true"
+          PR_AGENT.GITHUB_ACTION_CONFIG.ENABLE_OUTPUT: "true"
+          PR_AGENT.GITHUB_ACTION_CONFIG.PR_ACTIONS: '["opened", "synchronize", "reopened", "ready_for_review"]'
