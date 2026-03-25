@@ -1,0 +1,8 @@
+[config]
+model = "gpt-4.1"
+
+[github_action_config]
+auto_review = true
+auto_describe = true
+auto_improve = true
+pr_actions = ["opened", "synchronize", "reopened", "ready_for_review"]
